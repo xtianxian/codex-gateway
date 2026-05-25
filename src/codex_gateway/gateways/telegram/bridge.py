@@ -1,0 +1,633 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import mimetypes
+import secrets
+import sys
+from datetime import timedelta
+from pathlib import Path
+from typing import Any, Awaitable, Callable
+
+from ...backends.codex_app_server.client import AppServerClient, AppServerEvent, JsonRpcError
+from ...backends.codex_app_server.lifecycle import AppServerProcessManager
+from ...backends.codex_app_server.protocol import generated_protocol_methods, generated_server_request_methods
+from ...backends.codex_app_server.transport import WebSocketJsonRpcTransport
+from ...core.commands import default_command_registry
+from .access import AccessManager, _format_iso, _parse_iso
+from .bot_api import TelegramAPIError, TelegramBotAPI
+from .commands import (
+    TelegramCommand,
+    TelegramCommandKind,
+    command_turn_prompt,
+    parse_telegram_command,
+    unsupported_command_message,
+)
+from .bridge_helpers import (
+    sanitize_text,
+    _input_items,
+    _assistant_text,
+    _output_attachment,
+    _output_attachment_caption,
+    _decode_image_result,
+    _image_content_type,
+    _generated_image_filename,
+    _extract_id,
+    _tool_arguments,
+    _tool_file_path,
+    _tool_name,
+    _message_id,
+    _pairing_guidance_text,
+    _start_pairing_text,
+    _unauthorized_user_text,
+    _turn_id,
+    _thread_id,
+    _item,
+    _command_summary,
+    _file_change_summary,
+    _approval_text,
+    _permissions_approval_text,
+    _current_user_input_question,
+    _question_options,
+    _tool_user_input_text,
+    _mcp_elicitation_text,
+    _mcp_elicitation_field_labels,
+    _action_past_tense,
+    _params_shape,
+    _skill_names,
+    _iter_skill_groups,
+    _skill_path,
+    _result_items,
+    _result_items_or_scalars,
+    _find_named_item,
+    _find_model,
+    _find_permission_profile,
+    _resolve_permission_profile,
+    _cli_permission_choice,
+    _find_skill,
+    _model_config_value,
+    _model_selection_options,
+    _split_model_effort_args,
+    _reasoning_effort_aliases,
+    _reasoning_effort_value,
+    _personality_value,
+    _memory_mode_value,
+    _reasoning_effort_label,
+    _model_supported_reasoning_efforts,
+    _model_default_reasoning_effort,
+    _model_supports_reasoning_effort,
+    _model_reasoning_effort_options,
+    _unsupported_model_effort_text,
+    _permission_profile_value,
+    _permission_profile_label,
+    _permission_lookup_key,
+    _permission_profile_approval_policy,
+    _mode_selection_values,
+    _mode_display_name,
+    _format_models,
+    _format_features,
+    _feature_name,
+    _feature_label,
+    _format_skills,
+    _format_apps,
+    _format_plugins,
+    _format_loaded_threads,
+    _loaded_thread_line,
+    _loaded_thread_label,
+    _thread_status_text,
+    _thread_is_subagent,
+    _format_guardian_denials,
+    _guardian_denial_label,
+    _live_process_lines,
+    _thread_process_lines,
+    _iter_thread_items,
+    _process_item_line,
+    _dedupe_lines,
+    _apps_unavailable_error,
+    _format_account,
+    _format_rate_limits,
+    _format_rate_limit_snapshot,
+    _format_gateway_status,
+    _status_config,
+    _first_text,
+    _format_permission_status,
+    _format_agents_status,
+    _find_agents_file,
+    _format_status_account,
+    _format_context_window_status,
+    _format_token_usage_status,
+    _format_rate_limit_status,
+    _format_rate_limit_window,
+    _rate_limit_window_label,
+    _format_reset_time,
+    _format_thread_token_usage,
+    _format_token_breakdown,
+    _int_or_none,
+    _format_int,
+    _percent,
+    _format_hooks,
+    _format_mcp_servers,
+    _format_config,
+    _thread_id_from_thread_item,
+    _thread_title_from_item,
+    _thread_title_from_text,
+    _thread_title_from_read_result,
+    _first_thread_message_text,
+    _thread_item_text,
+    _resume_button_text,
+    _format_threads,
+    _format_goal,
+    _format_lines,
+    _git_diff_with_untracked,
+    _run_git,
+    _untracked_file_diff,
+    _safe_filename,
+    _attachment_filename,
+    _attachment_mime_type,
+    _is_image_attachment,
+    _bot_chat_id,
+    _command_disabled_during_active_turn,
+    _thread_sandbox_value,
+    _approval_policy_value,
+)
+from .constants import (
+    _AUTH_HEADER_PATTERN,
+    _SECRET_PATTERNS,
+    TYPING_ACTION_INTERVAL_SECONDS,
+    AUTO_THREAD_TITLE_MAX_CHARS,
+    APPROVAL_POLICY_CHOICES,
+    EFFORT_CHOICES,
+    PERSONALITY_CHOICES,
+    MEMORY_MODE_CHOICES,
+    CLI_PERMISSION_CHOICES,
+    ACTIVE_TURN_DISABLED_COMMANDS,
+    SETTABLE_EXPERIMENTAL_FEATURES,
+    TELEGRAM_SERVER_REQUEST_SUPPORT,
+    TELEGRAM_DYNAMIC_TOOLS_FINGERPRINT_KEY,
+    TELEGRAM_GATEWAY_DEVELOPER_INSTRUCTIONS,
+    TELEGRAM_HELP_TEXT,
+)
+from .dynamic_tools import _dynamic_tools_fingerprint, telegram_dynamic_tools
+from .bridge_commands import TelegramBridgeCommandMixin
+from .bridge_io import TelegramBridgeIOMixin
+from .bridge_requests import TelegramBridgeRequestMixin
+from .bridge_threads import TelegramBridgeThreadMixin
+from .config import (
+    TelegramSettings,
+    TelegramSettingsError,
+    get_telegram_settings,
+    is_path_within_any_root,
+    resolve_workspace,
+)
+from .state import TelegramStateStore
+from .types import OutputAttachment, TurnContext
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+class TelegramBridge(
+    TelegramBridgeCommandMixin,
+    TelegramBridgeThreadMixin,
+    TelegramBridgeRequestMixin,
+    TelegramBridgeIOMixin,
+):
+    def __init__(
+        self,
+        settings: TelegramSettings,
+        store: TelegramStateStore,
+        access: AccessManager,
+        bot: Any,
+        app_server: Any,
+    ) -> None:
+        self.settings = settings
+        self.store = store
+        self.access = access
+        self.bot = bot
+        self.app_server = app_server
+        self.turns: dict[str, TurnContext] = {}
+        self.latest_turn_by_thread: dict[str, str] = {}
+        self.bridge_messages: set[tuple[str, int]] = set()
+        self.resumed_thread_ids: set[str] = set()
+        self.workspace_reset_chats: set[str] = set()
+        self.typing_tasks: dict[str, asyncio.Task[None]] = {}
+        self.background_tasks: set[asyncio.Task[Any]] = set()
+        self.guardian_denials_by_thread: dict[str, list[dict[str, Any]]] = {}
+
+    async def sync_telegram_command_menu(self) -> str | None:
+        if not hasattr(self.bot, "set_my_commands"):
+            return None
+        registry = default_command_registry()
+        commands = registry.telegram_menu_payload(
+            supported_methods=set(generated_protocol_methods()),
+            enable_exec=self.settings.enable_exec,
+            advertise_exec=self.settings.advertise_exec,
+        )
+        try:
+            await self.bot.set_my_commands(commands)
+        except TelegramAPIError as exc:
+            return str(exc)
+        return None
+
+    async def handle_update(self, update: dict[str, Any]) -> None:
+        if "callback_query" in update:
+            await self._handle_callback(update["callback_query"])
+            return
+        message = update.get("message")
+        if not isinstance(message, dict):
+            return
+        chat_id = str((message.get("chat") or {}).get("id"))
+        user = message.get("from") or {}
+        user_id = str(user.get("id"))
+        username = str(user.get("username") or "")
+        text = str(message.get("text") or message.get("caption") or "")
+        command = parse_telegram_command(text)
+
+        self._record_last_update(chat_id, update.get("update_id"))
+
+        if not self.access.can_receive_message(chat_id=chat_id, user_id=user_id):
+            await self._handle_unpaired_or_unauthorized_user(chat_id, user_id, username, command)
+            return
+
+        if command.kind == TelegramCommandKind.MESSAGE and await self._handle_pending_user_input_message(
+            chat_id,
+            user_id,
+            text,
+        ):
+            return
+
+        if self._active_turn_context(chat_id) is not None and _command_disabled_during_active_turn(command):
+            await self._send_active_task_disabled_message(chat_id, command.name or "")
+            return
+
+        if command.kind == TelegramCommandKind.LOCAL:
+            await self._handle_local_command(chat_id, command)
+            return
+        if command.kind == TelegramCommandKind.THREAD:
+            try:
+                await self._handle_thread_command(chat_id, user_id, command)
+            except JsonRpcError as exc:
+                await self._send(chat_id, f"App-server command failed: {exc}")
+            return
+        if command.kind == TelegramCommandKind.APP_SERVER:
+            await self._handle_app_server_command(chat_id, user_id, command)
+            return
+        if command.kind == TelegramCommandKind.CODEX_TURN:
+            try:
+                if command.name == "exec":
+                    if not self.settings.enable_exec:
+                        await self._send(
+                            chat_id,
+                            "/exec is disabled. Set CODEX_GATEWAY_ENABLE_EXEC=1 to enable it.",
+                        )
+                        return
+                    if not command.args:
+                        await self._send(chat_id, "Use /exec <command>.")
+                        return
+                if command.name == "review" and await self._review_current_thread(chat_id):
+                    return
+                if command.name == "compact" and await self._compact_current_thread(chat_id):
+                    return
+                if command.name == "init":
+                    if await self._init_project_instructions(chat_id, user_id, _message_id(message)):
+                        return
+                if command.name == "plan":
+                    if await self._handle_plan_turn_command(chat_id, user_id, command, _message_id(message)):
+                        return
+                if self._active_turn_context(chat_id) is not None:
+                    await self._send_active_turn_wait_message(chat_id)
+                    return
+                await self._start_turn(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    message_id=_message_id(message),
+                    text=command_turn_prompt(command),
+                    attachments=[],
+                )
+            except JsonRpcError as exc:
+                await self._send(chat_id, f"App-server command failed: {exc}")
+            return
+        if command.kind == TelegramCommandKind.UNSUPPORTED:
+            await self._send(chat_id, unsupported_command_message(command))
+            return
+        if command.kind == TelegramCommandKind.UNKNOWN:
+            await self._send(chat_id, f"Unknown command: /{command.name}")
+            return
+
+        if self._active_turn_context(chat_id) is not None:
+            await self._send_active_turn_wait_message(chat_id)
+            return
+        attachments = await self._download_message_attachments(chat_id, message)
+        if attachments is None:
+            return
+        await self._start_turn(
+            chat_id=chat_id,
+            user_id=user_id,
+            message_id=_message_id(message),
+            text=text,
+            attachments=attachments,
+        )
+
+    async def handle_app_event(self, event: AppServerEvent) -> None:
+        if event.method == "thread/tokenUsage/updated":
+            self._save_thread_token_usage(event.params)
+            return
+        if event.method == "item/autoApprovalReview/completed":
+            self._record_guardian_denial(event.params)
+            return
+
+        turn_id = _turn_id(event.params)
+        context = self.turns.get(turn_id or "")
+        if context is None:
+            return
+
+        if event.method == "item/agentMessage/delta":
+            context.final_text += str(event.params.get("delta") or "")
+            return
+        if event.method == "item/started":
+            return
+        if event.method == "item/completed":
+            item = _item(event.params)
+            await self._send_output_attachment(context, item)
+            text = _assistant_text(item)
+            if text:
+                context.final_text = text
+            return
+        if "commandExecution/started" in event.method:
+            return
+        if "commandExecution/completed" in event.method:
+            return
+        if "fileChange" in event.method:
+            return
+        if event.method == "turn/completed":
+            self._stop_typing_indicator(context.turn_id)
+            context.completed = True
+            turn = event.params.get("turn") if isinstance(event.params.get("turn"), dict) else {}
+            status = str(turn.get("status") or event.params.get("status") or "completed")
+            if status == "failed":
+                error = turn.get("error") if isinstance(turn.get("error"), dict) else {}
+                message = error.get("message") if isinstance(error, dict) else None
+                await self._send(context.chat_id, f"Turn failed: {sanitize_text(str(message or 'Turn failed.'))}")
+                return
+            if status == "interrupted":
+                await self._send(context.chat_id, "Turn cancelled.")
+                return
+            for item in turn.get("items") or []:
+                if isinstance(item, dict):
+                    await self._send_output_attachment(context, item)
+            self._schedule_auto_name_thread(context)
+            if context.final_text and not context.tool_replied and not context.auto_replied:
+                await self._send(context.chat_id, context.final_text)
+                context.auto_replied = True
+
+    async def handle_app_server_request(self, event: AppServerEvent) -> None:
+        LOGGER.debug(
+            "app-server request method=%s request_id=%s params_shape=%s",
+            event.method,
+            event.request_id,
+            _params_shape(event.params),
+        )
+        handlers = {
+            "item/commandExecution/requestApproval": self._handle_approval_request,
+            "item/fileChange/requestApproval": self._handle_approval_request,
+            "item/permissions/requestApproval": self._handle_permissions_approval_request,
+            "mcpServer/elicitation/request": self._handle_mcp_elicitation_request,
+            "item/tool/requestUserInput": self._handle_tool_user_input_request,
+            "item/tool/call": self._handle_tool_call,
+        }
+        handler = handlers.get(event.method)
+        if handler is not None:
+            await handler(event)
+            return
+        if event.method == "account/chatgptAuthTokens/refresh":
+            if event.request_id is not None:
+                await self.app_server.send_error_response(
+                    event.request_id,
+                    "Server request account/chatgptAuthTokens/refresh is unsupported by the Telegram gateway.",
+                    code=-32601,
+                )
+            return
+        if event.method in {"attestation/generate", "applyPatchApproval", "execCommandApproval"}:
+            if event.request_id is not None:
+                await self.app_server.send_error_response(
+                    event.request_id,
+                    f"Server request {event.method} was not negotiated by the Telegram gateway.",
+                    code=-32601,
+                )
+            return
+        if event.request_id is not None:
+            await self.app_server.send_error_response(event.request_id, f"Unsupported app-server request: {event.method}")
+
+    def track_bridge_message(self, chat_id: str | int, message_id: int) -> None:
+        self.bridge_messages.add((str(chat_id), int(message_id)))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+async def run_telegram_bridge() -> None:
+    settings = get_telegram_settings()
+    if not settings.bot_token:
+        raise SystemExit("CODEX_GATEWAY_TELEGRAM_BOT_TOKEN is required for `telegram run`.")
+    store = TelegramStateStore(settings.state_dir)
+    access = AccessManager(store, allowed_user_id=settings.allowed_user_id)
+    bot = TelegramBotAPI(settings.bot_token)
+    process_manager: AppServerProcessManager | None = None
+    if settings.app_server_transport == "websocket":
+        process_manager = AppServerProcessManager(
+            codex_bin=settings.codex_bin,
+            url=settings.app_server_url,
+        )
+        await process_manager.start()
+        transport = WebSocketJsonRpcTransport(process_manager.url)
+        await transport.start()
+        app_server = AppServerClient(transport=transport)
+    elif settings.app_server_transport == "stdio":
+        app_server = AppServerClient(command=settings.app_server_command)
+    else:
+        raise SystemExit("CODEX_GATEWAY_APP_SERVER_TRANSPORT must be websocket or stdio.")
+    bridge = TelegramBridge(settings, store, access, bot, app_server)
+    app_server.on_notification = bridge.handle_app_event
+    app_server.on_request = bridge.handle_app_server_request
+    await app_server.start()
+    try:
+        sync_error = await bridge.sync_telegram_command_menu()
+        if sync_error:
+            print(f"Warning: Telegram command menu sync failed: {sync_error}", file=sys.stderr)
+        offset: int | None = initial_poll_offset(store)
+        while True:
+            updates = await get_updates_with_retry(
+                bot,
+                offset=offset,
+                timeout=settings.poll_timeout_seconds,
+            )
+            for update in updates:
+                update_id = update.get("update_id")
+                if isinstance(update_id, int):
+                    offset = update_id + 1
+                await bridge.handle_update(update)
+    finally:
+        bridge.stop_typing_indicators()
+        bridge.stop_background_tasks()
+        await app_server.stop()
+        if process_manager is not None:
+            await process_manager.stop()
+        await bot.aclose()
+
+
+async def get_updates_with_retry(
+    bot: Any,
+    *,
+    offset: int | None,
+    timeout: int,
+    retry_delay_seconds: float = 5.0,
+    sleep: Any = asyncio.sleep,
+    warn: Any = None,
+) -> list[dict[str, Any]]:
+    while True:
+        try:
+            return await bot.get_updates(offset=offset, timeout=timeout)
+        except TelegramAPIError as exc:
+            message = f"Telegram polling failed: {exc}; retrying in {retry_delay_seconds:g}s."
+            if warn is None:
+                print(f"Warning: {message}", file=sys.stderr)
+            else:
+                warn(message)
+            await sleep(retry_delay_seconds)
+
+
+def telegram_status_summary(settings: TelegramSettings, store: TelegramStateStore) -> dict[str, Any]:
+    return {
+        "state_dir": str(settings.state_dir),
+        "allowed_roots": [str(root) for root in settings.allowed_roots],
+        "default_cwd": str(settings.default_cwd),
+        "allowed_users": len(store.load_access().get("allowed_users", {})),
+        "thread_mappings": len(store.load_threads()),
+        "bot_token_configured": bool(settings.bot_token),
+        "allowed_user_configured": bool(settings.allowed_user_id),
+        "permission_profile": settings.permission_profile,
+        "sandbox": settings.sandbox,
+        "approval_policy": _approval_policy_value(settings.approval_policy),
+    }
+
+
+def initial_poll_offset(store: TelegramStateStore) -> int | None:
+    update_ids = [
+        int(entry.get("last_update_id"))
+        for entry in store.load_chats().values()
+        if isinstance(entry, dict) and isinstance(entry.get("last_update_id"), int)
+    ]
+    if not update_ids:
+        return None
+    return max(update_ids) + 1
