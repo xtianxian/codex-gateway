@@ -100,6 +100,15 @@ Codex authentication comes from your local `codex` CLI/app-server session. This
 gateway is for a Codex-capable ChatGPT account or subscription; it does not ask
 for or use an OpenAI API key such as `OPENAI_API_KEY` to run Codex.
 
+## Compatibility
+
+This alpha targets the Codex app-server protocol schema generated with
+`codex-cli 0.133.0`.
+
+The gateway talks to local Codex app-server over loopback WebSocket by default.
+If Codex app-server changes its generated schema, regenerate the checked-in
+protocol files and rerun the test suite before tagging a new snapshot.
+
 ## Quick Start
 
 GitHub shows a copy button on each fenced command block below.
