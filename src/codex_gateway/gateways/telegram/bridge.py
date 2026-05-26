@@ -148,6 +148,7 @@ from .bridge_helpers import (
     _attachment_filename,
     _attachment_mime_type,
     _is_image_attachment,
+    _message_text_with_payload_summary,
     _bot_chat_id,
     _command_disabled_during_active_turn,
     _thread_sandbox_value,
@@ -346,11 +347,12 @@ class TelegramBridge(
         attachments = await self._download_message_attachments(chat_id, message)
         if attachments is None:
             return
+        turn_text = _message_text_with_payload_summary(text, message)
         await self._start_turn(
             chat_id=chat_id,
             user_id=user_id,
             message_id=_message_id(message),
-            text=text,
+            text=turn_text,
             attachments=attachments,
         )
 

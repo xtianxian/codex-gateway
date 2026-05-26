@@ -332,6 +332,158 @@ class TelegramBridgeIOMixin:
         return sent if isinstance(sent, dict) else None
 
 
+    def _track_sent_message(self, chat_id: str | int, sent: Any) -> None:
+        messages = sent if isinstance(sent, list) else [sent]
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            message_id = message.get("message_id")
+            if message_id is not None:
+                self.track_bridge_message(chat_id, int(message_id))
+
+
+    async def _send_animation_bytes(
+        self,
+        chat_id: str | int,
+        data: bytes,
+        *,
+        filename: str,
+        caption: str | None = None,
+        content_type: str | None = None,
+        duration: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> dict[str, Any] | None:
+        sent = await self.bot.send_animation(
+            _bot_chat_id(chat_id),
+            data,
+            filename=_safe_filename(filename),
+            caption=caption,
+            content_type=content_type,
+            duration=duration,
+            width=width,
+            height=height,
+        )
+        self._track_sent_message(chat_id, sent)
+        return sent if isinstance(sent, dict) else None
+
+
+    async def _send_audio_bytes(
+        self,
+        chat_id: str | int,
+        data: bytes,
+        *,
+        filename: str,
+        caption: str | None = None,
+        content_type: str | None = None,
+        duration: int | None = None,
+        performer: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any] | None:
+        sent = await self.bot.send_audio(
+            _bot_chat_id(chat_id),
+            data,
+            filename=_safe_filename(filename),
+            caption=caption,
+            content_type=content_type,
+            duration=duration,
+            performer=performer,
+            title=title,
+        )
+        self._track_sent_message(chat_id, sent)
+        return sent if isinstance(sent, dict) else None
+
+
+    async def _send_voice_bytes(
+        self,
+        chat_id: str | int,
+        data: bytes,
+        *,
+        filename: str,
+        caption: str | None = None,
+        content_type: str | None = None,
+        duration: int | None = None,
+    ) -> dict[str, Any] | None:
+        sent = await self.bot.send_voice(
+            _bot_chat_id(chat_id),
+            data,
+            filename=_safe_filename(filename),
+            caption=caption,
+            content_type=content_type,
+            duration=duration,
+        )
+        self._track_sent_message(chat_id, sent)
+        return sent if isinstance(sent, dict) else None
+
+
+    async def _send_video_note_bytes(
+        self,
+        chat_id: str | int,
+        data: bytes,
+        *,
+        filename: str,
+        content_type: str | None = None,
+        duration: int | None = None,
+        length: int | None = None,
+    ) -> dict[str, Any] | None:
+        sent = await self.bot.send_video_note(
+            _bot_chat_id(chat_id),
+            data,
+            filename=_safe_filename(filename),
+            content_type=content_type,
+            duration=duration,
+            length=length,
+        )
+        self._track_sent_message(chat_id, sent)
+        return sent if isinstance(sent, dict) else None
+
+
+    async def _send_sticker_bytes(
+        self,
+        chat_id: str | int,
+        data: bytes,
+        *,
+        filename: str,
+        content_type: str | None = None,
+        emoji: str | None = None,
+    ) -> dict[str, Any] | None:
+        sent = await self.bot.send_sticker(
+            _bot_chat_id(chat_id),
+            data,
+            filename=_safe_filename(filename),
+            content_type=content_type,
+            emoji=emoji,
+        )
+        self._track_sent_message(chat_id, sent)
+        return sent if isinstance(sent, dict) else None
+
+
+    async def _send_live_photo_bytes(
+        self,
+        chat_id: str | int,
+        live_photo: bytes,
+        photo: bytes,
+        *,
+        live_photo_filename: str,
+        photo_filename: str,
+        caption: str | None = None,
+        live_photo_content_type: str | None = None,
+        photo_content_type: str | None = None,
+    ) -> dict[str, Any] | None:
+        sent = await self.bot.send_live_photo(
+            _bot_chat_id(chat_id),
+            live_photo,
+            photo,
+            live_photo_filename=_safe_filename(live_photo_filename),
+            photo_filename=_safe_filename(photo_filename),
+            caption=caption,
+            live_photo_content_type=live_photo_content_type,
+            photo_content_type=photo_content_type,
+        )
+        self._track_sent_message(chat_id, sent)
+        return sent if isinstance(sent, dict) else None
+
+
     async def _send_output_attachment(self, context: TurnContext, item: dict[str, Any]) -> None:
         attachment = _output_attachment(item)
         if attachment is None:

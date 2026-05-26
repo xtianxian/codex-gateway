@@ -99,8 +99,8 @@ TELEGRAM_SERVER_REQUEST_SUPPORT = {
 TELEGRAM_DYNAMIC_TOOLS_FINGERPRINT_KEY = "dynamic_tools_fingerprint"
 TELEGRAM_GATEWAY_DEVELOPER_INSTRUCTIONS = (
     "This thread is connected through a Telegram gateway. Generated image outputs are returned to Telegram "
-    "automatically. Use telegram_send_photo, telegram_send_video, or telegram_send_document only when you "
-    "intentionally need to send a local workspace file as a Telegram attachment."
+    "automatically. Native Telegram tools can send workspace files, structured payloads, or copy/forward the "
+    "current inbound message when a payload cannot be recreated directly."
 )
 TELEGRAM_HELP_TEXT = """Codex Gateway commands
 

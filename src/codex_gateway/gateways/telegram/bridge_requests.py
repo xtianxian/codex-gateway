@@ -181,6 +181,65 @@ from .types import OutputAttachment, TurnContext
 
 LOGGER = logging.getLogger(__name__)
 
+_FILE_SEND_TOOLS: dict[str, dict[str, Any]] = {
+    "telegram_send_photo": {"label": "Photo", "content_type_prefixes": ("image/",)},
+    "telegram_send_video": {"label": "Video", "content_type_prefixes": ("video/",)},
+    "telegram_send_document": {"label": "Document"},
+    "telegram_send_animation": {"label": "Animation", "suffixes": {".gif", ".mp4"}},
+    "telegram_send_audio": {"label": "Audio", "content_type_prefixes": ("audio/",)},
+    "telegram_send_voice": {"label": "Voice", "content_type_prefixes": ("audio/",)},
+    "telegram_send_video_note": {"label": "Video note", "content_type_prefixes": ("video/",)},
+    "telegram_send_sticker": {"label": "Sticker", "suffixes": {".webp", ".tgs", ".webm"}},
+}
+
+_STRUCTURED_SEND_TOOLS = {
+    "telegram_send_contact",
+    "telegram_send_location",
+    "telegram_send_venue",
+    "telegram_send_poll",
+    "telegram_send_checklist",
+    "telegram_send_dice",
+}
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _input_checklist(
+    title: str | None,
+    tasks: Any,
+    arguments: dict[str, Any],
+) -> tuple[dict[str, Any], str | None]:
+    if not title:
+        return {}, "Checklist title is required."
+    if not isinstance(tasks, list) or not tasks:
+        return {}, "Checklist tasks must be a non-empty array."
+    normalized_tasks: list[dict[str, Any]] = []
+    for index, task in enumerate(tasks, start=1):
+        if isinstance(task, str):
+            text = task
+            task_id = index
+        elif isinstance(task, dict):
+            text = _first_text(task.get("text"))
+            task_id = _int_or_none(task.get("id")) or index
+        else:
+            return {}, f"Checklist task {index} must be a string or object."
+        if not text:
+            return {}, f"Checklist task {index} text is required."
+        normalized_tasks.append({"id": task_id, "text": text})
+    checklist: dict[str, Any] = {"title": title, "tasks": normalized_tasks}
+    for key in ("others_can_add_tasks", "others_can_mark_tasks_as_done"):
+        value = arguments.get(key)
+        if isinstance(value, bool):
+            checklist[key] = value
+    return checklist, None
+
 
 class TelegramBridgeRequestMixin:
     async def _send_context_error_response(self, event: AppServerEvent) -> bool:
@@ -770,6 +829,26 @@ class TelegramBridgeRequestMixin:
             return
         tool = _tool_name(str(event.params.get("tool") or event.params.get("name") or ""))
         arguments = _tool_arguments(event.params.get("arguments"))
+        try:
+            handled = await self._handle_telegram_tool(event.request_id, context, tool, arguments)
+        except TelegramAPIError as exc:
+            await self._send_tool_text(event.request_id, f"Telegram API error: {exc}")
+            return
+        except Exception as exc:
+            LOGGER.exception("Telegram dynamic tool failed")
+            await self._send_tool_text(event.request_id, f"Telegram tool failed: {exc}")
+            return
+        if not handled:
+            await self._send_tool_text(event.request_id, f"Unsupported Telegram tool: {tool}")
+
+
+    async def _handle_telegram_tool(
+        self,
+        request_id: int | str,
+        context: TurnContext,
+        tool: str,
+        arguments: dict[str, Any],
+    ) -> bool:
         if tool == "telegram_reply":
             text = str(arguments.get("text") or "")
             sent = await self._send(
@@ -779,10 +858,9 @@ class TelegramBridgeRequestMixin:
                 reply_to_message_id=arguments.get("reply_to_message_id"),
             )
             context.tool_replied = True
-            await self.app_server.send_dynamic_tool_result(event.request_id, [{"type": "text", "text": "sent"}])
-            for message in sent:
-                self.track_bridge_message(context.chat_id, int(message.get("message_id") or 0))
-            return
+            self._track_sent_message(context.chat_id, sent)
+            await self._send_tool_text(request_id, self._sent_result_text(sent))
+            return True
         if tool == "telegram_react":
             message_id = int(arguments.get("message_id") or context.message_id or 0)
             emoji = str(arguments.get("emoji") or "")
@@ -791,146 +869,501 @@ class TelegramBridgeRequestMixin:
                 text = "reacted"
             except Exception as exc:  # pragma: no cover - concrete Bot API support varies
                 text = f"reaction unavailable: {exc}"
-            await self.app_server.send_dynamic_tool_result(event.request_id, [{"type": "text", "text": text}])
-            return
+            await self._send_tool_text(request_id, text)
+            return True
         if tool == "telegram_edit_message":
             message_id = int(arguments.get("message_id") or 0)
             if (context.chat_id, message_id) not in self.bridge_messages:
-                await self.app_server.send_dynamic_tool_result(
-                    event.request_id,
-                    [{"type": "text", "text": "Message is not bridge-owned and cannot be edited."}],
-                )
-                return
+                await self._send_tool_text(request_id, "Message is not bridge-owned and cannot be edited.")
+                return True
             await self.bot.edit_message_text(
                 _bot_chat_id(context.chat_id),
                 message_id,
                 str(arguments.get("text") or ""),
                 parse_mode=arguments.get("parse_mode"),
             )
-            await self.app_server.send_dynamic_tool_result(event.request_id, [{"type": "text", "text": "edited"}])
-            return
-        if tool in {"telegram_send_photo", "telegram_send_video"}:
-            media_label = "Photo" if tool == "telegram_send_photo" else "Video"
-            path = _tool_file_path(arguments, context.workspace)
-            if path is None:
-                await self.app_server.send_dynamic_tool_result(
-                    event.request_id,
-                    [{"type": "text", "text": f"{media_label} path is required."}],
-                )
-                return
-            if not is_path_within_any_root(path, (context.workspace,)):
-                await self.app_server.send_dynamic_tool_result(
-                    event.request_id,
-                    [{"type": "text", "text": f"{media_label} path is outside the active workspace."}],
-                )
-                return
-            if not path.is_file():
-                await self.app_server.send_dynamic_tool_result(
-                    event.request_id,
-                    [{"type": "text", "text": f"{media_label} was not found: {path}"}],
-                )
-                return
-            size = path.stat().st_size
-            if size > self.settings.max_attachment_bytes:
-                await self.app_server.send_dynamic_tool_result(
-                    event.request_id,
-                    [{"type": "text", "text": f"{media_label} is too large for this bridge."}],
-                )
-                return
-            filename = _first_text(arguments.get("filename")) or path.name
-            content_type = (
-                _first_text(arguments.get("content_type"))
-                or mimetypes.guess_type(filename)[0]
-                or mimetypes.guess_type(path.name)[0]
-            )
-            expected_prefix = "image/" if tool == "telegram_send_photo" else "video/"
-            if not content_type or not content_type.startswith(expected_prefix):
-                fallback = "telegram_send_document"
-                await self.app_server.send_dynamic_tool_result(
-                    event.request_id,
-                    [{"type": "text", "text": f"{media_label} type is unsupported; use {fallback}."}],
-                )
-                return
-            if tool == "telegram_send_photo":
-                sent = await self._send_photo_bytes(
-                    context.chat_id,
-                    path.read_bytes(),
-                    filename=filename,
-                    caption=_first_text(arguments.get("caption")),
-                    content_type=content_type,
-                )
-            else:
-                sent = await self._send_video_bytes(
-                    context.chat_id,
-                    path.read_bytes(),
-                    filename=filename,
-                    caption=_first_text(arguments.get("caption")),
-                    content_type=content_type,
-                    duration=_int_or_none(arguments.get("duration")),
-                    width=_int_or_none(arguments.get("width")),
-                    height=_int_or_none(arguments.get("height")),
-                )
-            context.tool_replied = True
-            message_id = sent.get("message_id") if isinstance(sent, dict) else None
-            result = "sent" + (f" message_id={message_id}" if message_id is not None else "")
-            await self.app_server.send_dynamic_tool_result(event.request_id, [{"type": "text", "text": result}])
-            return
-        if tool == "telegram_send_document":
-            path = _tool_file_path(arguments, context.workspace)
-            if path is None:
-                await self.app_server.send_dynamic_tool_result(
-                    event.request_id,
-                    [{"type": "text", "text": "Document path is required."}],
-                )
-                return
-            if not is_path_within_any_root(path, (context.workspace,)):
-                await self.app_server.send_dynamic_tool_result(
-                    event.request_id,
-                    [{"type": "text", "text": "Document path is outside the active workspace."}],
-                )
-                return
-            if not path.is_file():
-                await self.app_server.send_dynamic_tool_result(
-                    event.request_id,
-                    [{"type": "text", "text": f"Document was not found: {path}"}],
-                )
-                return
-            size = path.stat().st_size
-            if size > self.settings.max_attachment_bytes:
-                await self.app_server.send_dynamic_tool_result(
-                    event.request_id,
-                    [{"type": "text", "text": "Document is too large for this bridge."}],
-                )
-                return
-            filename = _first_text(arguments.get("filename")) or path.name
-            content_type = _first_text(arguments.get("content_type")) or mimetypes.guess_type(filename)[0]
-            sent = await self._send_document_bytes(
-                context.chat_id,
-                path.read_bytes(),
-                filename=filename,
-                caption=_first_text(arguments.get("caption")),
-                content_type=content_type,
-            )
-            context.tool_replied = True
-            message_id = sent.get("message_id") if isinstance(sent, dict) else None
-            result = "sent" + (f" message_id={message_id}" if message_id is not None else "")
-            await self.app_server.send_dynamic_tool_result(event.request_id, [{"type": "text", "text": result}])
-            return
+            await self._send_tool_text(request_id, "edited")
+            return True
+        if tool in _FILE_SEND_TOOLS:
+            await self._handle_file_send_tool(request_id, context, tool, arguments)
+            return True
+        if tool == "telegram_send_live_photo":
+            await self._handle_live_photo_tool(request_id, context, arguments)
+            return True
+        if tool == "telegram_send_media_group":
+            await self._handle_media_group_tool(request_id, context, arguments)
+            return True
+        if tool == "telegram_send_paid_media":
+            await self._handle_paid_media_tool(request_id, context, arguments)
+            return True
+        if tool in _STRUCTURED_SEND_TOOLS:
+            await self._handle_structured_send_tool(request_id, context, tool, arguments)
+            return True
+        if tool in {"telegram_copy_current_message", "telegram_forward_current_message"}:
+            await self._handle_current_message_reuse_tool(request_id, context, tool, arguments)
+            return True
         if tool == "telegram_download_attachment":
             file_id = str(arguments.get("file_id") or "")
             attachment = context.attachments.get(file_id)
             if not attachment:
-                await self.app_server.send_dynamic_tool_result(
-                    event.request_id,
-                    [{"type": "text", "text": "Attachment is not available in the current turn."}],
+                await self._send_tool_text(request_id, "Attachment is not available in the current turn.")
+                return True
+            await self._send_tool_text(request_id, json.dumps(attachment, sort_keys=True))
+            return True
+        return False
+
+
+    async def _send_tool_text(self, request_id: int | str, text: str) -> None:
+        await self.app_server.send_dynamic_tool_result(request_id, [{"type": "text", "text": text}])
+
+
+    def _sent_result_text(self, sent: Any) -> str:
+        if isinstance(sent, list):
+            ids = [str(item.get("message_id")) for item in sent if isinstance(item, dict) and item.get("message_id")]
+            return "sent" + (f" message_ids={','.join(ids)}" if ids else "")
+        message_id = sent.get("message_id") if isinstance(sent, dict) else None
+        result = "sent" + (f" message_id={message_id}" if message_id is not None else "")
+        details = self._sent_result_details(sent)
+        return result + (f" {details}" if details else "")
+
+
+    def _sent_result_details(self, sent: Any) -> str:
+        if not isinstance(sent, dict):
+            return ""
+        dice = sent.get("dice")
+        if isinstance(dice, dict):
+            parts = []
+            emoji = _first_text(dice.get("emoji"))
+            if emoji:
+                parts.append(f"dice_emoji={emoji}")
+            if dice.get("value") is not None:
+                parts.append(f"dice_value={dice['value']}")
+            return " ".join(parts)
+        poll = sent.get("poll")
+        if isinstance(poll, dict):
+            poll_id = _first_text(poll.get("id"))
+            if poll_id:
+                return f"poll_id={poll_id}"
+        return ""
+
+
+    async def _handle_file_send_tool(
+        self,
+        request_id: int | str,
+        context: TurnContext,
+        tool: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        spec = _FILE_SEND_TOOLS[tool]
+        label = str(spec["label"])
+        path, error = self._tool_upload_path(arguments, context, label=label)
+        if error:
+            await self._send_tool_text(request_id, error)
+            return
+        assert path is not None
+        filename = _first_text(arguments.get("filename")) or path.name
+        content_type = (
+            _first_text(arguments.get("content_type"))
+            or mimetypes.guess_type(filename)[0]
+            or mimetypes.guess_type(path.name)[0]
+        )
+        allowed_prefixes = spec.get("content_type_prefixes")
+        if allowed_prefixes and (not content_type or not str(content_type).startswith(tuple(allowed_prefixes))):
+            await self._send_tool_text(request_id, f"{label} type is unsupported; use telegram_send_document.")
+            return
+        allowed_suffixes = spec.get("suffixes")
+        if allowed_suffixes and path.suffix.lower() not in allowed_suffixes:
+            await self._send_tool_text(request_id, f"{label} format is unsupported; use telegram_send_document.")
+            return
+        data = path.read_bytes()
+        caption = _first_text(arguments.get("caption"))
+        if tool == "telegram_send_photo":
+            sent = await self._send_photo_bytes(
+                context.chat_id,
+                data,
+                filename=filename,
+                caption=caption,
+                content_type=content_type,
+            )
+        elif tool == "telegram_send_video":
+            sent = await self._send_video_bytes(
+                context.chat_id,
+                data,
+                filename=filename,
+                caption=caption,
+                content_type=content_type,
+                duration=_int_or_none(arguments.get("duration")),
+                width=_int_or_none(arguments.get("width")),
+                height=_int_or_none(arguments.get("height")),
+            )
+        elif tool == "telegram_send_document":
+            sent = await self._send_document_bytes(
+                context.chat_id,
+                data,
+                filename=filename,
+                caption=caption,
+                content_type=content_type,
+            )
+        elif tool == "telegram_send_animation":
+            sent = await self._send_animation_bytes(
+                context.chat_id,
+                data,
+                filename=filename,
+                caption=caption,
+                content_type=content_type,
+                duration=_int_or_none(arguments.get("duration")),
+                width=_int_or_none(arguments.get("width")),
+                height=_int_or_none(arguments.get("height")),
+            )
+        elif tool == "telegram_send_audio":
+            sent = await self._send_audio_bytes(
+                context.chat_id,
+                data,
+                filename=filename,
+                caption=caption,
+                content_type=content_type,
+                duration=_int_or_none(arguments.get("duration")),
+                performer=_first_text(arguments.get("performer")),
+                title=_first_text(arguments.get("title")),
+            )
+        elif tool == "telegram_send_voice":
+            sent = await self._send_voice_bytes(
+                context.chat_id,
+                data,
+                filename=filename,
+                caption=caption,
+                content_type=content_type,
+                duration=_int_or_none(arguments.get("duration")),
+            )
+        elif tool == "telegram_send_video_note":
+            sent = await self._send_video_note_bytes(
+                context.chat_id,
+                data,
+                filename=filename,
+                content_type=content_type,
+                duration=_int_or_none(arguments.get("duration")),
+                length=_int_or_none(arguments.get("length")),
+            )
+        else:
+            sent = await self._send_sticker_bytes(
+                context.chat_id,
+                data,
+                filename=filename,
+                content_type=content_type,
+                emoji=_first_text(arguments.get("emoji")),
+            )
+        context.tool_replied = True
+        await self._send_tool_text(request_id, self._sent_result_text(sent))
+
+
+    async def _handle_live_photo_tool(
+        self,
+        request_id: int | str,
+        context: TurnContext,
+        arguments: dict[str, Any],
+    ) -> None:
+        live_path, error = self._tool_upload_path(arguments, context, label="Live photo", key="live_photo_path")
+        if error:
+            await self._send_tool_text(request_id, error)
+            return
+        photo_path, error = self._tool_upload_path(arguments, context, label="Live photo still image", key="photo_path")
+        if error:
+            await self._send_tool_text(request_id, error)
+            return
+        assert live_path is not None and photo_path is not None
+        sent = await self._send_live_photo_bytes(
+            context.chat_id,
+            live_path.read_bytes(),
+            photo_path.read_bytes(),
+            live_photo_filename=_first_text(arguments.get("live_photo_filename")) or live_path.name,
+            photo_filename=_first_text(arguments.get("photo_filename")) or photo_path.name,
+            caption=_first_text(arguments.get("caption")),
+            live_photo_content_type=(
+                _first_text(arguments.get("live_photo_content_type"))
+                or mimetypes.guess_type(live_path.name)[0]
+            ),
+            photo_content_type=(
+                _first_text(arguments.get("photo_content_type"))
+                or mimetypes.guess_type(photo_path.name)[0]
+            ),
+        )
+        context.tool_replied = True
+        await self._send_tool_text(request_id, self._sent_result_text(sent))
+
+
+    async def _handle_media_group_tool(
+        self,
+        request_id: int | str,
+        context: TurnContext,
+        arguments: dict[str, Any],
+    ) -> None:
+        media, files, error = self._media_group_payload(context, arguments.get("media"), paid=False)
+        if error:
+            await self._send_tool_text(request_id, error)
+            return
+        sent = await self.bot.send_media_group(_bot_chat_id(context.chat_id), media, files=files)
+        self._track_sent_message(context.chat_id, sent)
+        context.tool_replied = True
+        await self._send_tool_text(request_id, self._sent_result_text(sent))
+
+
+    async def _handle_paid_media_tool(
+        self,
+        request_id: int | str,
+        context: TurnContext,
+        arguments: dict[str, Any],
+    ) -> None:
+        star_count = _int_or_none(arguments.get("star_count"))
+        if star_count is None or star_count <= 0:
+            await self._send_tool_text(request_id, "Paid media star_count must be a positive integer.")
+            return
+        media, files, error = self._media_group_payload(context, arguments.get("media"), paid=True)
+        if error:
+            await self._send_tool_text(request_id, error)
+            return
+        sent = await self.bot.send_paid_media(
+            _bot_chat_id(context.chat_id),
+            star_count,
+            media,
+            caption=_first_text(arguments.get("caption")),
+            payload=_first_text(arguments.get("payload")),
+            files=files,
+        )
+        self._track_sent_message(context.chat_id, sent)
+        context.tool_replied = True
+        await self._send_tool_text(request_id, self._sent_result_text(sent))
+
+
+    async def _handle_structured_send_tool(
+        self,
+        request_id: int | str,
+        context: TurnContext,
+        tool: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        chat_id = _bot_chat_id(context.chat_id)
+        if tool == "telegram_send_contact":
+            phone = _first_text(arguments.get("phone_number"))
+            first_name = _first_text(arguments.get("first_name"))
+            if not phone or not first_name:
+                await self._send_tool_text(request_id, "Contact phone_number and first_name are required.")
+                return
+            sent = await self.bot.send_contact(
+                chat_id,
+                phone,
+                first_name,
+                last_name=_first_text(arguments.get("last_name")),
+                vcard=_first_text(arguments.get("vcard")),
+            )
+        elif tool == "telegram_send_location":
+            latitude = _float_or_none(arguments.get("latitude"))
+            longitude = _float_or_none(arguments.get("longitude"))
+            if latitude is None or longitude is None:
+                await self._send_tool_text(request_id, "Location latitude and longitude are required.")
+                return
+            sent = await self.bot.send_location(
+                chat_id,
+                latitude,
+                longitude,
+                horizontal_accuracy=_float_or_none(arguments.get("horizontal_accuracy")),
+                live_period=_int_or_none(arguments.get("live_period")),
+                heading=_int_or_none(arguments.get("heading")),
+                proximity_alert_radius=_int_or_none(arguments.get("proximity_alert_radius")),
+            )
+        elif tool == "telegram_send_venue":
+            latitude = _float_or_none(arguments.get("latitude"))
+            longitude = _float_or_none(arguments.get("longitude"))
+            title = _first_text(arguments.get("title"))
+            address = _first_text(arguments.get("address"))
+            if latitude is None or longitude is None or not title or not address:
+                await self._send_tool_text(request_id, "Venue latitude, longitude, title, and address are required.")
+                return
+            sent = await self.bot.send_venue(
+                chat_id,
+                latitude,
+                longitude,
+                title,
+                address,
+                foursquare_id=_first_text(arguments.get("foursquare_id")),
+                foursquare_type=_first_text(arguments.get("foursquare_type")),
+                google_place_id=_first_text(arguments.get("google_place_id")),
+                google_place_type=_first_text(arguments.get("google_place_type")),
+            )
+        elif tool == "telegram_send_poll":
+            question = _first_text(arguments.get("question"))
+            options = arguments.get("options")
+            if not question or not isinstance(options, list) or len(options) < 2:
+                await self._send_tool_text(request_id, "Poll question and at least two options are required.")
+                return
+            sent = await self.bot.send_poll(
+                chat_id,
+                question,
+                options,
+                is_anonymous=arguments.get("is_anonymous"),
+                type=_first_text(arguments.get("type")),
+                allows_multiple_answers=arguments.get("allows_multiple_answers"),
+                correct_option_id=_int_or_none(arguments.get("correct_option_id")),
+                explanation=_first_text(arguments.get("explanation")),
+                open_period=_int_or_none(arguments.get("open_period")),
+                close_date=_int_or_none(arguments.get("close_date")),
+                is_closed=arguments.get("is_closed"),
+            )
+        elif tool == "telegram_send_checklist":
+            business_connection_id = _first_text(arguments.get("business_connection_id"))
+            title = _first_text(arguments.get("title"))
+            tasks = arguments.get("tasks")
+            if not business_connection_id:
+                await self._send_tool_text(
+                    request_id,
+                    "Checklist sends require business_connection_id for a connected Telegram business account.",
                 )
                 return
-            await self.app_server.send_dynamic_tool_result(
-                event.request_id,
-                [{"type": "text", "text": json.dumps(attachment, sort_keys=True)}],
-            )
+            checklist, error = _input_checklist(title, tasks, arguments)
+            if error:
+                await self._send_tool_text(request_id, error)
+                return
+            sent = await self.bot.send_checklist(chat_id, business_connection_id, checklist)
+        else:
+            sent = await self.bot.send_dice(chat_id, emoji=_first_text(arguments.get("emoji")))
+        self._track_sent_message(context.chat_id, sent)
+        context.tool_replied = True
+        await self._send_tool_text(request_id, self._sent_result_text(sent))
+
+
+    async def _handle_current_message_reuse_tool(
+        self,
+        request_id: int | str,
+        context: TurnContext,
+        tool: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        if context.message_id is None:
+            await self._send_tool_text(request_id, "No current inbound Telegram message is available.")
             return
-        await self.app_server.send_dynamic_tool_result(
-            event.request_id,
-            [{"type": "text", "text": f"Unsupported Telegram tool: {tool}"}],
-        )
+        if tool == "telegram_copy_current_message":
+            sent = await self.bot.copy_message(
+                _bot_chat_id(context.chat_id),
+                _bot_chat_id(context.chat_id),
+                context.message_id,
+                caption=_first_text(arguments.get("caption")),
+                parse_mode=_first_text(arguments.get("parse_mode")),
+            )
+        else:
+            sent = await self.bot.forward_message(
+                _bot_chat_id(context.chat_id),
+                _bot_chat_id(context.chat_id),
+                context.message_id,
+            )
+        self._track_sent_message(context.chat_id, sent)
+        context.tool_replied = True
+        await self._send_tool_text(request_id, self._sent_result_text(sent))
+
+
+    def _tool_upload_path(
+        self,
+        arguments: dict[str, Any],
+        context: TurnContext,
+        *,
+        label: str,
+        key: str = "path",
+    ) -> tuple[Path | None, str | None]:
+        raw_path = _first_text(arguments.get(key))
+        if raw_path is None:
+            return None, f"{label} path is required."
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            path = context.workspace / path
+        path = path.resolve(strict=False)
+        if not self._tool_upload_path_allowed(path, context):
+            return None, f"{label} path is outside the active workspace and current-turn attachments."
+        if not path.is_file():
+            return None, f"{label} was not found: {path}"
+        if path.stat().st_size > self.settings.max_attachment_bytes:
+            return None, f"{label} is too large for this bridge."
+        return path, None
+
+
+    def _tool_upload_path_allowed(self, path: Path, context: TurnContext) -> bool:
+        if is_path_within_any_root(path, (context.workspace,)):
+            return True
+        for attachment in context.attachments.values():
+            attachment_path = _first_text(attachment.get("path")) if isinstance(attachment, dict) else None
+            if not attachment_path:
+                continue
+            if Path(attachment_path).expanduser().resolve(strict=False) == path:
+                return True
+        return False
+
+
+    def _media_group_payload(
+        self,
+        context: TurnContext,
+        raw_media: Any,
+        *,
+        paid: bool,
+    ) -> tuple[list[dict[str, Any]], dict[str, tuple[str, bytes, str | None]], str | None]:
+        if not isinstance(raw_media, list):
+            return [], {}, "Media must be an array."
+        if not raw_media:
+            return [], {}, "Media must include at least one item."
+        if not paid and len(raw_media) < 2:
+            return [], {}, "Media group must include at least two items."
+        files: dict[str, tuple[str, bytes, str | None]] = {}
+        media: list[dict[str, Any]] = []
+        allowed_types = {"photo", "video", "live_photo"} if paid else {"photo", "video", "document", "audio", "live_photo"}
+        for index, item in enumerate(raw_media):
+            if not isinstance(item, dict):
+                return [], {}, f"Media item {index + 1} must be an object."
+            media_type = _first_text(item.get("type")) or ""
+            if media_type not in allowed_types:
+                return [], {}, f"Media item {index + 1} type is unsupported: {media_type or 'missing'}"
+            path_key = "live_photo_path" if media_type == "live_photo" and item.get("live_photo_path") else "path"
+            path, error = self._tool_upload_path(item, context, label=f"Media item {index + 1}", key=path_key)
+            if error:
+                return [], {}, error
+            assert path is not None
+            attach_name = f"media{index}"
+            filename = _first_text(item.get("filename")) or path.name
+            content_type = (
+                _first_text(item.get("content_type"))
+                or mimetypes.guess_type(filename)[0]
+                or mimetypes.guess_type(path.name)[0]
+            )
+            files[attach_name] = (_safe_filename(filename), path.read_bytes(), content_type)
+            media_item = {"type": media_type, "media": f"attach://{attach_name}"}
+            if media_type == "live_photo":
+                photo_path, photo_error = self._tool_upload_path(
+                    item,
+                    context,
+                    label=f"Media item {index + 1} photo",
+                    key="photo_path",
+                )
+                if photo_error:
+                    return [], {}, photo_error
+                assert photo_path is not None
+                photo_attach_name = f"photo{index}"
+                photo_filename = _first_text(item.get("photo_filename")) or photo_path.name
+                photo_content_type = (
+                    _first_text(item.get("photo_content_type"))
+                    or mimetypes.guess_type(photo_filename)[0]
+                    or mimetypes.guess_type(photo_path.name)[0]
+                )
+                files[photo_attach_name] = (_safe_filename(photo_filename), photo_path.read_bytes(), photo_content_type)
+                media_item["photo"] = f"attach://{photo_attach_name}"
+            for key in (
+                "caption",
+                "parse_mode",
+                "duration",
+                "width",
+                "height",
+                "performer",
+                "title",
+                "supports_streaming",
+                "has_spoiler",
+                "show_caption_above_media",
+            ):
+                value = item.get(key)
+                if value is not None:
+                    media_item[key] = value
+            media.append(media_item)
+        return media, files, None

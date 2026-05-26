@@ -50,9 +50,15 @@ to configured local workspaces.
   skills, approvals, and app-server-backed choices.
 - App-server request handling for command approval, file approval, permissions,
   MCP elicitation, tool user input, and Telegram dynamic tools.
-- Attachment download support with configurable size limits, image inputs,
-  generated images, and workspace files sent back as native Telegram photos,
-  videos, or documents.
+- Attachment download support with configurable size limits for native Telegram
+  file payloads including documents, photos, videos, audio, voice, stickers,
+  live photos, and paid media.
+- Structured Telegram payload summaries for contacts, locations, venues, polls,
+  dice, checklists, stories, payments, gifts, sharing, web app data, and common
+  service messages.
+- Generated images plus workspace files and structured responses sent back
+  through native Telegram media, contact, location, venue, poll, checklist,
+  dice, copy, and forward methods where Bot API allows them.
 - Telegram command-menu sync based on the locally generated app-server schema.
 - Optional Windows background startup through the `CodexGateway` service.
 
@@ -157,6 +163,12 @@ mode model. `/new` and stale thread replacement reuse saved permissions,
 approval policy, personality, memory mode, active mode, and that mode's model
 and effort. `/clear` forgets only the active app-server thread ID; `/reset`
 clears the saved preferences.
+
+Telegram file upload tools are deliberately scoped to active workspace files
+and exact attachments downloaded during the current turn. If a Telegram payload
+cannot be recreated directly, Codex can use the current-message copy or forward
+tools as a fallback. Send-tool results return compact message IDs, dice values,
+and poll IDs instead of full Telegram message JSON.
 
 ## Pair Telegram
 

@@ -145,6 +145,8 @@ from .bridge_helpers import (
     _safe_filename,
     _attachment_filename,
     _attachment_mime_type,
+    _downloadable_message_payloads,
+    _downloaded_attachment_metadata,
     _is_image_attachment,
     _bot_chat_id,
     _command_disabled_during_active_turn,
@@ -1085,17 +1087,8 @@ class TelegramBridgeThreadMixin:
         message: dict[str, Any],
     ) -> list[dict[str, Any]] | None:
         attachments: list[dict[str, Any]] = []
-        document = message.get("document")
-        if isinstance(document, dict):
-            downloaded = await self._download_attachment(chat_id, _message_id(message), document)
-            if downloaded is None:
-                return None
-            attachments.append(downloaded)
-        photos = message.get("photo")
-        if isinstance(photos, list) and photos:
-            photo = dict(photos[-1])
-            photo.setdefault("_default_file_stem", f"photo_{photo.get('file_unique_id') or photo.get('file_id')}")
-            downloaded = await self._download_attachment(chat_id, _message_id(message), photo)
+        for _payload_type, payload in _downloadable_message_payloads(message):
+            downloaded = await self._download_attachment(chat_id, _message_id(message), payload)
             if downloaded is None:
                 return None
             attachments.append(downloaded)
@@ -1134,10 +1127,11 @@ class TelegramBridgeThreadMixin:
             await self._send(chat_id, "Attachment filename was rejected.")
             return None
         target.write_bytes(data)
-        return {
-            "file_id": file_id,
-            "filename": filename,
-            "path": str(target),
-            "mime_type": _attachment_mime_type(attachment, filename, file_path),
-            "size_bytes": len(data),
-        }
+        return _downloaded_attachment_metadata(
+            attachment,
+            file_id=file_id,
+            filename=filename,
+            path=target,
+            mime_type=_attachment_mime_type(attachment, filename, file_path),
+            size_bytes=len(data),
+        )

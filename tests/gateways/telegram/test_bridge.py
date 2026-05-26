@@ -27,6 +27,7 @@ from codex_gateway.gateways.telegram.commands import (
     THREAD_COMMANDS,
     UNSUPPORTED_COMMANDS,
 )
+from codex_gateway.gateways.telegram.bot_api import TelegramAPIError
 from codex_gateway.gateways.telegram.config import TelegramSettings
 from codex_gateway.gateways.telegram.state import TelegramStateStore
 
@@ -37,6 +38,22 @@ class FakeBot:
         self.documents: list[dict[str, Any]] = []
         self.photos: list[dict[str, Any]] = []
         self.videos: list[dict[str, Any]] = []
+        self.animations: list[dict[str, Any]] = []
+        self.audios: list[dict[str, Any]] = []
+        self.voices: list[dict[str, Any]] = []
+        self.video_notes: list[dict[str, Any]] = []
+        self.stickers: list[dict[str, Any]] = []
+        self.live_photos: list[dict[str, Any]] = []
+        self.media_groups: list[dict[str, Any]] = []
+        self.paid_media: list[dict[str, Any]] = []
+        self.contacts: list[dict[str, Any]] = []
+        self.locations: list[dict[str, Any]] = []
+        self.venues: list[dict[str, Any]] = []
+        self.polls: list[dict[str, Any]] = []
+        self.checklists: list[dict[str, Any]] = []
+        self.dice: list[dict[str, Any]] = []
+        self.copied_messages: list[dict[str, Any]] = []
+        self.forwarded_messages: list[dict[str, Any]] = []
         self.edits: list[dict[str, Any]] = []
         self.answers: list[dict[str, Any]] = []
         self.reactions: list[dict[str, Any]] = []
@@ -123,6 +140,316 @@ class FakeBot:
             "height": height,
         }
         self.videos.append(message)
+        return message
+
+    async def send_animation(
+        self,
+        chat_id: str | int,
+        animation: bytes,
+        *,
+        filename: str,
+        caption: str | None = None,
+        content_type: str | None = None,
+        duration: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {
+            "message_id": self.next_message_id,
+            "chat": {"id": chat_id},
+            "animation": animation,
+            "filename": filename,
+            "caption": caption,
+            "content_type": content_type,
+            "duration": duration,
+            "width": width,
+            "height": height,
+        }
+        self.animations.append(message)
+        return message
+
+    async def send_audio(
+        self,
+        chat_id: str | int,
+        audio: bytes,
+        *,
+        filename: str,
+        caption: str | None = None,
+        content_type: str | None = None,
+        duration: int | None = None,
+        performer: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {
+            "message_id": self.next_message_id,
+            "chat": {"id": chat_id},
+            "audio": audio,
+            "filename": filename,
+            "caption": caption,
+            "content_type": content_type,
+            "duration": duration,
+            "performer": performer,
+            "title": title,
+        }
+        self.audios.append(message)
+        return message
+
+    async def send_voice(
+        self,
+        chat_id: str | int,
+        voice: bytes,
+        *,
+        filename: str,
+        caption: str | None = None,
+        content_type: str | None = None,
+        duration: int | None = None,
+    ) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {
+            "message_id": self.next_message_id,
+            "chat": {"id": chat_id},
+            "voice": voice,
+            "filename": filename,
+            "caption": caption,
+            "content_type": content_type,
+            "duration": duration,
+        }
+        self.voices.append(message)
+        return message
+
+    async def send_video_note(
+        self,
+        chat_id: str | int,
+        video_note: bytes,
+        *,
+        filename: str,
+        content_type: str | None = None,
+        duration: int | None = None,
+        length: int | None = None,
+    ) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {
+            "message_id": self.next_message_id,
+            "chat": {"id": chat_id},
+            "video_note": video_note,
+            "filename": filename,
+            "content_type": content_type,
+            "duration": duration,
+            "length": length,
+        }
+        self.video_notes.append(message)
+        return message
+
+    async def send_sticker(
+        self,
+        chat_id: str | int,
+        sticker: bytes,
+        *,
+        filename: str,
+        content_type: str | None = None,
+        emoji: str | None = None,
+    ) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {
+            "message_id": self.next_message_id,
+            "chat": {"id": chat_id},
+            "sticker": sticker,
+            "filename": filename,
+            "content_type": content_type,
+            "emoji": emoji,
+        }
+        self.stickers.append(message)
+        return message
+
+    async def send_live_photo(
+        self,
+        chat_id: str | int,
+        live_photo: bytes,
+        photo: bytes,
+        *,
+        live_photo_filename: str,
+        photo_filename: str,
+        caption: str | None = None,
+        live_photo_content_type: str | None = None,
+        photo_content_type: str | None = None,
+    ) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {
+            "message_id": self.next_message_id,
+            "chat": {"id": chat_id},
+            "live_photo": live_photo,
+            "photo": photo,
+            "live_photo_filename": live_photo_filename,
+            "photo_filename": photo_filename,
+            "caption": caption,
+            "live_photo_content_type": live_photo_content_type,
+            "photo_content_type": photo_content_type,
+        }
+        self.live_photos.append(message)
+        return message
+
+    async def send_media_group(
+        self,
+        chat_id: str | int,
+        media: list[dict[str, Any]],
+        *,
+        files: dict[str, tuple[str, bytes, str | None]] | None = None,
+    ) -> list[dict[str, Any]]:
+        messages = []
+        for item in media:
+            self.next_message_id += 1
+            messages.append({"message_id": self.next_message_id, "chat": {"id": chat_id}, "media": item})
+        self.media_groups.append({"chat_id": chat_id, "media": media, "files": files or {}})
+        return messages
+
+    async def send_paid_media(
+        self,
+        chat_id: str | int,
+        star_count: int,
+        media: list[dict[str, Any]],
+        *,
+        caption: str | None = None,
+        payload: str | None = None,
+        files: dict[str, tuple[str, bytes, str | None]] | None = None,
+    ) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {
+            "message_id": self.next_message_id,
+            "chat": {"id": chat_id},
+            "star_count": star_count,
+            "media": media,
+            "caption": caption,
+            "payload": payload,
+            "files": files or {},
+        }
+        self.paid_media.append(message)
+        return message
+
+    async def send_contact(self, chat_id: str | int, phone_number: str, first_name: str, **kwargs: Any) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {"message_id": self.next_message_id, "chat": {"id": chat_id}, "phone_number": phone_number, "first_name": first_name, **kwargs}
+        self.contacts.append(message)
+        return message
+
+    async def send_location(self, chat_id: str | int, latitude: float, longitude: float, **kwargs: Any) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {"message_id": self.next_message_id, "chat": {"id": chat_id}, "latitude": latitude, "longitude": longitude, **kwargs}
+        self.locations.append(message)
+        return message
+
+    async def send_venue(
+        self,
+        chat_id: str | int,
+        latitude: float,
+        longitude: float,
+        title: str,
+        address: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {
+            "message_id": self.next_message_id,
+            "chat": {"id": chat_id},
+            "latitude": latitude,
+            "longitude": longitude,
+            "title": title,
+            "address": address,
+            **kwargs,
+        }
+        self.venues.append(message)
+        return message
+
+    async def send_poll(
+        self,
+        chat_id: str | int,
+        question: str,
+        options: list[Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.next_message_id += 1
+        normalized_options = [
+            {"text": str(option), "voter_count": 0}
+            if not isinstance(option, dict)
+            else {"voter_count": 0, **option}
+            for option in options
+        ]
+        poll = {
+            "id": f"poll_{self.next_message_id}",
+            "question": question,
+            "options": normalized_options,
+            "total_voter_count": 0,
+            "is_anonymous": kwargs.get("is_anonymous", True),
+            "type": kwargs.get("type") or "regular",
+            "allows_multiple_answers": kwargs.get("allows_multiple_answers", False),
+            "is_closed": kwargs.get("is_closed", False),
+        }
+        message = {"message_id": self.next_message_id, "chat": {"id": chat_id}, "poll": poll}
+        self.polls.append(message)
+        return message
+
+    async def send_checklist(
+        self,
+        chat_id: str | int,
+        business_connection_id: str,
+        checklist: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {
+            "message_id": self.next_message_id,
+            "chat": {"id": chat_id},
+            "business_connection_id": business_connection_id,
+            "checklist": checklist,
+        }
+        self.checklists.append(message)
+        return message
+
+    async def send_dice(self, chat_id: str | int, *, emoji: str | None = None) -> dict[str, Any]:
+        self.next_message_id += 1
+        resolved_emoji = emoji or "🎲"
+        message = {
+            "message_id": self.next_message_id,
+            "chat": {"id": chat_id},
+            "dice": {"emoji": resolved_emoji, "value": 3},
+        }
+        self.dice.append(message)
+        return message
+
+    async def copy_message(
+        self,
+        chat_id: str | int,
+        from_chat_id: str | int,
+        message_id: int,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {
+            "message_id": self.next_message_id,
+            "chat_id": chat_id,
+            "from_chat_id": from_chat_id,
+            "source_message_id": message_id,
+            **kwargs,
+        }
+        self.copied_messages.append(message)
+        return message
+
+    async def forward_message(
+        self,
+        chat_id: str | int,
+        from_chat_id: str | int,
+        message_id: int,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.next_message_id += 1
+        message = {
+            "message_id": self.next_message_id,
+            "chat_id": chat_id,
+            "from_chat_id": from_chat_id,
+            "source_message_id": message_id,
+            **kwargs,
+        }
+        self.forwarded_messages.append(message)
         return message
 
     async def edit_message_text(self, chat_id: str | int, message_id: int, text: str, **kwargs: Any) -> bool:
@@ -2502,6 +2829,194 @@ async def test_photo_attachment_download_uses_largest_variant_and_caption_text(t
     assert "MIME type: image/png" in app_server.turn_starts[0]["input_items"][2]["text"]
 
 
+@pytest.mark.parametrize(
+    ("payload", "file_id", "file_path", "data", "expected_type", "expected_text"),
+    [
+        (
+            {"video": {"file_id": "video_1", "file_unique_id": "v1", "file_size": 9, "duration": 5, "width": 640, "height": 360, "mime_type": "video/mp4"}},
+            "video_1",
+            "videos/clip.mp4",
+            b"mp4 bytes",
+            "video",
+            "Duration: 5",
+        ),
+        (
+            {
+                "animation": {"file_id": "anim_1", "file_unique_id": "a1", "file_size": 7, "duration": 2, "width": 320, "height": 180, "mime_type": "image/gif"},
+                "document": {"file_id": "doc_duplicate", "file_name": "duplicate.gif", "file_size": 7},
+            },
+            "anim_1",
+            "animations/loop.gif",
+            b"gifdata",
+            "animation",
+            "Payload type: animation",
+        ),
+        (
+            {"audio": {"file_id": "audio_1", "file_unique_id": "au1", "file_name": "song.mp3", "file_size": 5, "mime_type": "audio/mpeg", "duration": 30, "performer": "Ada", "title": "Theme"}},
+            "audio_1",
+            "audio/song.mp3",
+            b"audio",
+            "audio",
+            "Performer: Ada",
+        ),
+        (
+            {"voice": {"file_id": "voice_1", "file_unique_id": "vo1", "file_size": 5, "mime_type": "audio/ogg", "duration": 8}},
+            "voice_1",
+            "voice/note.oga",
+            b"voice",
+            "voice",
+            "Duration: 8",
+        ),
+        (
+            {"video_note": {"file_id": "vn_1", "file_unique_id": "vn1", "file_size": 5, "duration": 4, "length": 240}},
+            "vn_1",
+            "video_notes/note.mp4",
+            b"note",
+            "video_note",
+            "Length: 240",
+        ),
+        (
+            {"sticker": {"file_id": "sticker_1", "file_unique_id": "s1", "file_size": 5, "emoji": ":)", "type": "regular", "is_animated": False, "is_video": False}},
+            "sticker_1",
+            "stickers/smile.webp",
+            b"webp",
+            "sticker",
+            "Emoji: :)",
+        ),
+        (
+            {
+                "live_photo": {"file_id": "live_1", "file_unique_id": "lp1", "file_size": 5, "duration": 3, "width": 720, "height": 1280},
+                "photo": [{"file_id": "photo_duplicate", "file_unique_id": "pd", "file_size": 3}],
+            },
+            "live_1",
+            "live/live.mp4",
+            b"live",
+            "live_photo",
+            "Payload type: live_photo",
+        ),
+        (
+            {
+                "paid_media": {
+                    "star_count": 25,
+                    "paid_media": [
+                        {"type": "preview", "width": 100, "height": 100},
+                        {"type": "video", "video": {"file_id": "paid_video_1", "file_unique_id": "pv1", "file_size": 6, "duration": 6, "mime_type": "video/mp4"}},
+                    ],
+                }
+            },
+            "paid_video_1",
+            "paid/video.mp4",
+            b"paid",
+            "paid_media.video",
+            "Paid media stars: 25",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_native_downloadable_payloads_are_stored_with_metadata(
+    tmp_path: Path,
+    payload: dict[str, Any],
+    file_id: str,
+    file_path: str,
+    data: bytes,
+    expected_type: str,
+    expected_text: str,
+) -> None:
+    bridge, bot, app_server, store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    bot.files[file_id] = {"file_path": file_path, "file_size": len(data)}
+    bot.downloads[file_path] = data
+    update = message_update("inspect", message_id=15)
+    update["message"].update(payload)
+
+    await bridge.handle_update(update)
+
+    saved_files = list(store.downloads_dir(42, 15).iterdir())
+    assert len(saved_files) == 1
+    assert saved_files[0].read_bytes() == data
+    context = bridge._active_turn_context("42")
+    assert context is not None
+    assert context.attachments[file_id]["telegram_payload_type"] == expected_type
+    attachment_text = "\n".join(
+        item["text"] for item in app_server.turn_starts[0]["input_items"] if item["type"] == "text"
+    )
+    assert expected_text in attachment_text
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected", "unexpected"),
+    [
+        ({"contact": {"phone_number": "+15551212", "first_name": "Ada", "last_name": "Lovelace", "user_id": 99}}, "Telegram contact", None),
+        ({"location": {"latitude": 14.6, "longitude": 121.0, "horizontal_accuracy": 10}}, "Telegram location", None),
+        (
+            {
+                "venue": {
+                    "location": {"latitude": 14.6, "longitude": 121.0},
+                    "title": "HQ",
+                    "address": "Main St",
+                },
+                "location": {"latitude": 1, "longitude": 2},
+            },
+            "Telegram venue",
+            "Telegram location",
+        ),
+        ({"poll": {"id": "poll_1", "question": "Ship?", "options": [{"text": "Yes", "voter_count": 2}], "total_voter_count": 2}}, "Telegram poll", None),
+        ({"dice": {"emoji": "🎲", "value": 4}}, "Telegram dice", None),
+        ({"checklist": {"title": "Launch", "tasks": [{"id": 1, "text": "Test"}, {"id": 2, "text": "Ship", "completion_date": 1}]}}, "Telegram checklist", None),
+        ({"story": {"chat": {"id": -100}, "id": 7}}, "Telegram story", None),
+        ({"game": {"title": "Puzzle", "description": "Solve it"}}, "Telegram game", None),
+        ({"invoice": {"title": "Plan", "currency": "XTR", "total_amount": 500}}, "Telegram invoice", None),
+        ({"successful_payment": {"currency": "XTR", "total_amount": 500, "invoice_payload": "payload"}}, "Telegram successful payment", None),
+        ({"gift": {"id": "gift_1"}}, "Telegram gift", None),
+        ({"users_shared": {"request_id": 3, "users": [{"user_id": 123}]}}, "Telegram users shared", None),
+        ({"chat_shared": {"request_id": 4, "chat_id": -100}}, "Telegram chat shared", None),
+        ({"web_app_data": {"button_text": "Open", "data": "{\"ok\":true}"}}, "Telegram web app data", None),
+        ({"new_chat_title": "New title"}, "Telegram service: new chat title", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_structured_payloads_are_summarized_for_codex(
+    tmp_path: Path,
+    payload: dict[str, Any],
+    expected: str,
+    unexpected: str | None,
+) -> None:
+    bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    update = message_update("", message_id=16)
+    update["message"].update(payload)
+
+    await bridge.handle_update(update)
+
+    text = app_server.turn_starts[0]["input_items"][0]["text"]
+    assert expected in text
+    if unexpected:
+        assert unexpected not in text
+
+
+@pytest.mark.asyncio
+async def test_inbound_poll_summary_includes_vote_counts(tmp_path: Path) -> None:
+    bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    update = message_update("", message_id=17)
+    update["message"]["poll"] = {
+        "id": "poll_1",
+        "question": "Ship?",
+        "options": [
+            {"text": "Yes", "voter_count": 2},
+            {"text": "No", "voter_count": 1},
+        ],
+        "total_voter_count": 3,
+    }
+
+    await bridge.handle_update(update)
+
+    text = app_server.turn_starts[0]["input_items"][0]["text"]
+    assert "total_voter_count: 3" in text
+    assert "option_1: Yes (2 votes)" in text
+    assert "option_2: No (1 votes)" in text
+
+
 @pytest.mark.asyncio
 async def test_oversized_attachment_is_rejected_before_download(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
@@ -3733,7 +4248,7 @@ async def test_telegram_reply_tool_suppresses_final_auto_reply(tmp_path: Path) -
     await bridge.handle_app_event(AppServerEvent("turn/completed", {"turnId": "turn_1"}))
 
     assert [message["text"] for message in bot.messages] == ["sent by tool"]
-    assert app_server.tool_results[0]["content"][0]["text"] == "sent"
+    assert app_server.tool_results[0]["content"][0]["text"] == "sent message_ids=1001"
 
 
 @pytest.mark.asyncio
@@ -3765,7 +4280,7 @@ async def test_telegram_reply_tool_sends_valid_message_options(tmp_path: Path) -
         "parse_mode": "HTML",
         "reply_to_message_id": 10,
     }
-    assert app_server.tool_results[-1]["content"] == [{"type": "text", "text": "sent"}]
+    assert app_server.tool_results[-1]["content"] == [{"type": "text", "text": "sent message_ids=1001"}]
 
 
 @pytest.mark.asyncio
@@ -3923,6 +4438,157 @@ async def test_media_tools_send_workspace_files_to_native_telegram_methods(tmp_p
 
 
 @pytest.mark.parametrize(
+    ("tool", "filename", "data", "collection_name", "media_key", "arguments", "expected"),
+    [
+        (
+            "telegram_send_animation",
+            "loop.gif",
+            b"gif bytes",
+            "animations",
+            "animation",
+            {"caption": "Loop", "duration": 2, "width": 320, "height": 180},
+            {"caption": "Loop", "duration": 2, "width": 320, "height": 180},
+        ),
+        (
+            "telegram_send_audio",
+            "song.mp3",
+            b"mp3 bytes",
+            "audios",
+            "audio",
+            {"caption": "Song", "duration": 30, "performer": "Ada", "title": "Theme"},
+            {"caption": "Song", "duration": 30, "performer": "Ada", "title": "Theme"},
+        ),
+        (
+            "telegram_send_voice",
+            "voice.ogg",
+            b"ogg bytes",
+            "voices",
+            "voice",
+            {"caption": "Voice", "duration": 5},
+            {"caption": "Voice", "duration": 5},
+        ),
+        (
+            "telegram_send_video_note",
+            "note.mp4",
+            b"note bytes",
+            "video_notes",
+            "video_note",
+            {"duration": 4, "length": 240},
+            {"duration": 4, "length": 240},
+        ),
+        (
+            "telegram_send_sticker",
+            "sticker.webp",
+            b"webp bytes",
+            "stickers",
+            "sticker",
+            {"emoji": ":)"},
+            {"emoji": ":)"},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_additional_media_tools_send_workspace_files_to_native_methods(
+    tmp_path: Path,
+    tool: str,
+    filename: str,
+    data: bytes,
+    collection_name: str,
+    media_key: str,
+    arguments: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    path = bridge.settings.default_cwd / filename
+    path.write_bytes(data)
+    await bridge.handle_update(message_update("send media"))
+
+    await bridge.handle_app_server_request(
+        AppServerEvent(
+            "item/tool/call",
+            {"turnId": "turn_1", "tool": tool, "arguments": {"path": filename, **arguments}},
+            request_id=188,
+        )
+    )
+
+    sent = getattr(bot, collection_name)[-1]
+    assert sent["filename"] == filename
+    assert sent[media_key] == data
+    for key, value in expected.items():
+        assert sent[key] == value
+    assert app_server.tool_results[-1]["content"][0]["text"].startswith("sent message_id=")
+
+
+@pytest.mark.asyncio
+async def test_live_photo_media_group_and_paid_media_tools_send_native_payloads(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    for name, data in {
+        "live.mp4": b"live video",
+        "still.jpg": b"still",
+        "photo.jpg": b"photo",
+        "clip.mp4": b"clip",
+        "paid.mp4": b"paid",
+    }.items():
+        (bridge.settings.default_cwd / name).write_bytes(data)
+    await bridge.handle_update(message_update("send rich media"))
+
+    await bridge.handle_app_server_request(
+        AppServerEvent(
+            "item/tool/call",
+            {
+                "turnId": "turn_1",
+                "tool": "telegram_send_live_photo",
+                "arguments": {"live_photo_path": "live.mp4", "photo_path": "still.jpg", "caption": "Live"},
+            },
+            request_id=189,
+        )
+    )
+    await bridge.handle_app_server_request(
+        AppServerEvent(
+            "item/tool/call",
+            {
+                "turnId": "turn_1",
+                "tool": "telegram_send_media_group",
+                "arguments": {
+                    "media": [
+                        {"type": "photo", "path": "photo.jpg", "caption": "A"},
+                        {"type": "video", "path": "clip.mp4", "duration": 3},
+                    ]
+                },
+            },
+            request_id=190,
+        )
+    )
+    await bridge.handle_app_server_request(
+        AppServerEvent(
+            "item/tool/call",
+            {
+                "turnId": "turn_1",
+                "tool": "telegram_send_paid_media",
+                "arguments": {"star_count": 5, "media": [{"type": "video", "path": "paid.mp4"}], "caption": "Paid"},
+            },
+            request_id=191,
+        )
+    )
+
+    assert bot.live_photos[-1]["live_photo"] == b"live video"
+    assert bot.live_photos[-1]["photo"] == b"still"
+    assert bot.live_photos[-1]["caption"] == "Live"
+    assert bot.media_groups[-1]["media"][0]["media"] == "attach://media0"
+    assert bot.media_groups[-1]["files"]["media0"][1] == b"photo"
+    assert bot.media_groups[-1]["files"]["media1"][1] == b"clip"
+    assert bot.paid_media[-1]["star_count"] == 5
+    assert bot.paid_media[-1]["media"][0]["type"] == "video"
+    assert bot.paid_media[-1]["files"]["media0"][1] == b"paid"
+    result_texts = [result["content"][0]["text"] for result in app_server.tool_results[-3:]]
+    assert result_texts[0].startswith("sent message_id=")
+    assert re.fullmatch(r"sent message_ids=\d+,\d+", result_texts[1])
+    assert result_texts[2].startswith("sent message_id=")
+
+
+@pytest.mark.parametrize(
     ("tool", "filename", "label", "collection_name"),
     [
         ("telegram_send_photo", "photo.png", "Photo", "photos"),
@@ -3990,6 +4656,125 @@ async def test_send_document_tool_rejects_files_outside_active_workspace(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_send_file_tools_allow_current_turn_downloaded_attachment_paths(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    bot.files["file_1"] = {"file_path": "docs/note.txt", "file_size": 4}
+    bot.downloads["docs/note.txt"] = b"note"
+    update = message_update("send it back")
+    update["message"]["document"] = {"file_id": "file_1", "file_name": "note.txt", "file_size": 4}
+    await bridge.handle_update(update)
+    context = bridge._active_turn_context("42")
+    assert context is not None
+    downloaded_path = context.attachments["file_1"]["path"]
+
+    await bridge.handle_app_server_request(
+        AppServerEvent(
+            "item/tool/call",
+            {"turnId": "turn_1", "tool": "telegram_send_document", "arguments": {"path": downloaded_path}},
+            request_id=192,
+        )
+    )
+
+    assert bot.documents[-1]["filename"] == "note.txt"
+    assert bot.documents[-1]["document"] == b"note"
+    assert app_server.tool_results[-1]["content"][0]["text"].startswith("sent message_id=")
+
+
+@pytest.mark.asyncio
+async def test_structured_send_tools_route_to_native_bot_methods(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    await bridge.handle_update(message_update("send structured payloads"))
+
+    calls = [
+        ("telegram_send_contact", {"phone_number": "+15551212", "first_name": "Ada", "last_name": "Lovelace"}),
+        ("telegram_send_location", {"latitude": 14.6, "longitude": 121.0, "horizontal_accuracy": 12.5}),
+        ("telegram_send_venue", {"latitude": 14.6, "longitude": 121.0, "title": "HQ", "address": "Main St"}),
+        ("telegram_send_poll", {"question": "Ship?", "options": ["Yes", "No"], "is_anonymous": False}),
+        ("telegram_send_checklist", {"business_connection_id": "biz_1", "title": "Launch", "tasks": ["Test", {"id": 9, "text": "Ship"}]}),
+        ("telegram_send_dice", {"emoji": "🎲"}),
+    ]
+    for index, (tool, arguments) in enumerate(calls, start=193):
+        await bridge.handle_app_server_request(
+            AppServerEvent(
+                "item/tool/call",
+                {"turnId": "turn_1", "tool": tool, "arguments": arguments},
+                request_id=index,
+            )
+        )
+
+    assert bot.contacts[-1]["phone_number"] == "+15551212"
+    assert bot.locations[-1]["latitude"] == 14.6
+    assert bot.venues[-1]["title"] == "HQ"
+    assert bot.polls[-1]["poll"]["question"] == "Ship?"
+    assert bot.checklists[-1]["business_connection_id"] == "biz_1"
+    assert bot.checklists[-1]["checklist"]["tasks"][1] == {"id": 9, "text": "Ship"}
+    assert bot.dice[-1]["dice"]["emoji"] == "🎲"
+    assert all(result["content"][0]["text"].startswith("sent message_id=") for result in app_server.tool_results[-6:])
+    assert "poll_id=poll_" in app_server.tool_results[-3]["content"][0]["text"]
+    assert "dice_value=3" in app_server.tool_results[-1]["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_copy_and_forward_tools_are_scoped_to_current_inbound_message(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    await bridge.handle_update(message_update("copy this", message_id=44))
+
+    await bridge.handle_app_server_request(
+        AppServerEvent(
+            "item/tool/call",
+            {"turnId": "turn_1", "tool": "telegram_copy_current_message", "arguments": {"caption": "Copied"}},
+            request_id=199,
+        )
+    )
+    await bridge.handle_app_server_request(
+        AppServerEvent(
+            "item/tool/call",
+            {"turnId": "turn_1", "tool": "telegram_forward_current_message", "arguments": {}},
+            request_id=200,
+        )
+    )
+
+    assert bot.copied_messages[-1]["chat_id"] == 42
+    assert bot.copied_messages[-1]["from_chat_id"] == 42
+    assert bot.copied_messages[-1]["source_message_id"] == 44
+    assert bot.copied_messages[-1]["caption"] == "Copied"
+    assert bot.forwarded_messages[-1]["source_message_id"] == 44
+    assert app_server.tool_results[-2]["content"][0]["text"].startswith("sent message_id=")
+    assert app_server.tool_results[-1]["content"][0]["text"].startswith("sent message_id=")
+
+
+@pytest.mark.asyncio
+async def test_telegram_api_tool_errors_are_returned_as_tool_results(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    paid = bridge.settings.default_cwd / "paid.mp4"
+    paid.write_bytes(b"paid")
+    await bridge.handle_update(message_update("send paid"))
+
+    async def failing_paid_media(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise TelegramAPIError("Telegram API sendPaidMedia failed: 400 account is restricted")
+
+    bot.send_paid_media = failing_paid_media  # type: ignore[method-assign]
+    await bridge.handle_app_server_request(
+        AppServerEvent(
+            "item/tool/call",
+            {
+                "turnId": "turn_1",
+                "tool": "telegram_send_paid_media",
+                "arguments": {"star_count": 5, "media": [{"type": "video", "path": "paid.mp4"}]},
+            },
+            request_id=201,
+        )
+    )
+
+    assert "Telegram API error" in app_server.tool_results[-1]["content"][0]["text"]
+    assert "account is restricted" in app_server.tool_results[-1]["content"][0]["text"]
+
+
+@pytest.mark.asyncio
 async def test_skill_marker_adds_skill_input_when_app_server_lookup_finds_path(tmp_path: Path) -> None:
     bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
     access.allow_user("123", username="xtian", source="cli")
@@ -4042,10 +4827,28 @@ def test_dynamic_tool_names_are_responses_api_safe() -> None:
         "telegram_send_photo",
         "telegram_send_video",
         "telegram_send_document",
+        "telegram_send_animation",
+        "telegram_send_audio",
+        "telegram_send_voice",
+        "telegram_send_video_note",
+        "telegram_send_sticker",
+        "telegram_send_live_photo",
+        "telegram_send_media_group",
+        "telegram_send_paid_media",
+        "telegram_send_contact",
+        "telegram_send_location",
+        "telegram_send_venue",
+        "telegram_send_poll",
+        "telegram_send_checklist",
+        "telegram_send_dice",
+        "telegram_copy_current_message",
+        "telegram_forward_current_message",
     ]
     assert all("." not in name for name in names)
     assert _tool_name("telegram.reply") == "telegram_reply"
     assert _tool_name("telegram.send_photo") == "telegram_send_photo"
     assert _tool_name("telegram.send_video") == "telegram_send_video"
     assert _tool_name("telegram.send_document") == "telegram_send_document"
+    assert _tool_name("telegram.send_paid_media") == "telegram_send_paid_media"
+    assert _tool_name("telegram.copy_current_message") == "telegram_copy_current_message"
 

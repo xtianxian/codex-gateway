@@ -46,18 +46,421 @@ def _input_items(text: str, attachments: list[dict[str, Any]]) -> list[dict[str,
     for attachment in attachments:
         if _is_image_attachment(attachment):
             items.append({"type": "localImage", "path": attachment["path"], "detail": "original"})
+        attachment_lines = [
+            f"Telegram attachment: {attachment['filename']}",
+            f"Local path: {attachment['path']}",
+            f"MIME type: {attachment['mime_type']}",
+            f"Size: {attachment['size_bytes']} bytes",
+        ]
+        for key, label in (
+            ("telegram_payload_type", "Payload type"),
+            ("file_id", "Telegram file id"),
+            ("file_unique_id", "Telegram file unique id"),
+            ("media_group_id", "Media group id"),
+            ("duration", "Duration"),
+            ("width", "Width"),
+            ("height", "Height"),
+            ("length", "Length"),
+            ("performer", "Performer"),
+            ("title", "Title"),
+            ("emoji", "Emoji"),
+            ("sticker_type", "Sticker type"),
+            ("sticker_format", "Sticker format"),
+            ("paid_media_star_count", "Paid media stars"),
+            ("paid_media_index", "Paid media index"),
+        ):
+            value = attachment.get(key)
+            if value is not None and value != "":
+                attachment_lines.append(f"{label}: {value}")
         items.append(
             {
                 "type": "text",
-                "text": (
-                    f"Telegram attachment: {attachment['filename']}\n"
-                    f"Local path: {attachment['path']}\n"
-                    f"MIME type: {attachment['mime_type']}\n"
-                    f"Size: {attachment['size_bytes']} bytes"
-                ),
+                "text": "\n".join(attachment_lines),
             }
         )
     return items or [{"type": "text", "text": ""}]
+
+
+def _message_text_with_payload_summary(text: str, message: dict[str, Any]) -> str:
+    summary = _message_payload_summary(message)
+    parts = [part for part in (text.strip(), summary) if part]
+    return "\n\n".join(parts)
+
+
+def _downloadable_message_payloads(message: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    payloads: list[tuple[str, dict[str, Any]]] = []
+    media_group_id = _first_text(message.get("media_group_id"))
+
+    def add(payload_type: str, payload: dict[str, Any], **metadata: Any) -> None:
+        if not _first_text(payload.get("file_id")):
+            return
+        item = dict(payload)
+        item["_telegram_payload_type"] = payload_type
+        if media_group_id:
+            item["_media_group_id"] = media_group_id
+        for key, value in metadata.items():
+            if value is not None:
+                item[f"_{key}"] = value
+        if "_default_file_stem" not in item:
+            item["_default_file_stem"] = _payload_default_stem(payload_type, item)
+        payloads.append((payload_type, item))
+
+    animation = message.get("animation")
+    if isinstance(animation, dict):
+        add("animation", animation)
+    else:
+        document = message.get("document")
+        if isinstance(document, dict):
+            add("document", document)
+
+    live_photo = message.get("live_photo")
+    if isinstance(live_photo, dict):
+        add("live_photo", live_photo)
+    else:
+        photo = _largest_photo(message.get("photo"))
+        if photo is not None:
+            add("photo", photo)
+
+    for payload_type in ("video", "audio", "voice", "video_note", "sticker"):
+        payload = message.get(payload_type)
+        if isinstance(payload, dict):
+            add(payload_type, payload)
+
+    paid_media = message.get("paid_media")
+    if isinstance(paid_media, dict):
+        star_count = _int_or_none(paid_media.get("star_count"))
+        for index, item in enumerate(paid_media.get("paid_media") or []):
+            if not isinstance(item, dict):
+                continue
+            media_type = str(item.get("type") or "")
+            if media_type == "photo":
+                photo = _largest_photo(item.get("photo"))
+                if photo is not None:
+                    add(
+                        "paid_media.photo",
+                        photo,
+                        paid_media_star_count=star_count,
+                        paid_media_index=index,
+                    )
+            elif media_type == "video" and isinstance(item.get("video"), dict):
+                add(
+                    "paid_media.video",
+                    item["video"],
+                    paid_media_star_count=star_count,
+                    paid_media_index=index,
+                )
+            elif media_type == "live_photo" and isinstance(item.get("live_photo"), dict):
+                add(
+                    "paid_media.live_photo",
+                    item["live_photo"],
+                    paid_media_star_count=star_count,
+                    paid_media_index=index,
+                )
+    return payloads
+
+
+def _downloaded_attachment_metadata(
+    attachment: dict[str, Any],
+    *,
+    file_id: str,
+    filename: str,
+    path: Path,
+    mime_type: str,
+    size_bytes: int,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "file_id": file_id,
+        "filename": filename,
+        "path": str(path),
+        "mime_type": mime_type,
+        "size_bytes": size_bytes,
+        "telegram_payload_type": str(attachment.get("_telegram_payload_type") or "file"),
+    }
+    for source_key, target_key in (
+        ("file_unique_id", "file_unique_id"),
+        ("file_name", "original_filename"),
+        ("file_size", "telegram_file_size"),
+        ("duration", "duration"),
+        ("width", "width"),
+        ("height", "height"),
+        ("length", "length"),
+        ("performer", "performer"),
+        ("title", "title"),
+        ("emoji", "emoji"),
+        ("type", "sticker_type"),
+        ("format", "sticker_format"),
+        ("is_animated", "is_animated"),
+        ("is_video", "is_video"),
+        ("set_name", "sticker_set_name"),
+    ):
+        value = attachment.get(source_key)
+        if value is not None and value != "":
+            metadata[target_key] = value
+    for source_key, target_key in (
+        ("_media_group_id", "media_group_id"),
+        ("_paid_media_star_count", "paid_media_star_count"),
+        ("_paid_media_index", "paid_media_index"),
+    ):
+        value = attachment.get(source_key)
+        if value is not None and value != "":
+            metadata[target_key] = value
+    return metadata
+
+
+def _largest_photo(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    photos = [item for item in value if isinstance(item, dict)]
+    if not photos:
+        return None
+    return dict(photos[-1])
+
+
+def _payload_default_stem(payload_type: str, payload: dict[str, Any]) -> str:
+    safe_type = re.sub(r"[^A-Za-z0-9]+", "_", payload_type).strip("_") or "file"
+    identity = _first_text(payload.get("file_unique_id"), payload.get("file_id")) or safe_type
+    return f"{safe_type}_{identity}"
+
+
+def _message_payload_summary(message: dict[str, Any]) -> str:
+    sections: list[str] = []
+
+    contact = message.get("contact")
+    if isinstance(contact, dict):
+        sections.append(_contact_summary(contact))
+
+    venue = message.get("venue")
+    if isinstance(venue, dict):
+        sections.append(_venue_summary(venue))
+    else:
+        location = message.get("location")
+        if isinstance(location, dict):
+            sections.append(_location_summary(location))
+
+    poll = message.get("poll")
+    if isinstance(poll, dict):
+        sections.append(_poll_summary(poll))
+
+    dice = message.get("dice")
+    if isinstance(dice, dict):
+        sections.append(_payload_section("Telegram dice", _payload_kv_lines(dice, ("emoji", "value"))))
+
+    checklist = message.get("checklist")
+    if isinstance(checklist, dict):
+        sections.append(_checklist_summary(checklist))
+
+    story = message.get("story")
+    if isinstance(story, dict):
+        sections.append(_payload_section("Telegram story", _payload_kv_lines(story, ("chat", "id"))))
+
+    game = message.get("game")
+    if isinstance(game, dict):
+        sections.append(_payload_section("Telegram game", _payload_kv_lines(game, ("title", "description", "text"))))
+
+    for field, title in (
+        ("invoice", "Telegram invoice"),
+        ("successful_payment", "Telegram successful payment"),
+        ("refunded_payment", "Telegram refunded payment"),
+        ("gift", "Telegram gift"),
+        ("unique_gift", "Telegram unique gift"),
+        ("users_shared", "Telegram users shared"),
+        ("chat_shared", "Telegram chat shared"),
+        ("web_app_data", "Telegram web app data"),
+    ):
+        value = message.get(field)
+        if isinstance(value, dict):
+            sections.append(_payload_section(title, _payload_kv_lines(value)))
+
+    paid_media = message.get("paid_media")
+    if isinstance(paid_media, dict):
+        sections.append(_paid_media_summary(paid_media))
+
+    for field in _SERVICE_PAYLOAD_FIELDS:
+        value = message.get(field)
+        if value is None:
+            continue
+        title = "Telegram service: " + field.replace("_", " ")
+        sections.append(_payload_section(title, _payload_kv_lines(value)))
+
+    return "\n\n".join(section for section in sections if section)
+
+
+def _contact_summary(contact: dict[str, Any]) -> str:
+    name = " ".join(
+        part for part in (_first_text(contact.get("first_name")), _first_text(contact.get("last_name"))) if part
+    )
+    lines = []
+    if name:
+        lines.append(f"Name: {name}")
+    lines.extend(_payload_kv_lines(contact, ("phone_number", "user_id", "vcard")))
+    return _payload_section("Telegram contact", lines)
+
+
+def _location_summary(location: dict[str, Any]) -> str:
+    return _payload_section(
+        "Telegram location",
+        _payload_kv_lines(
+            location,
+            ("latitude", "longitude", "horizontal_accuracy", "live_period", "heading", "proximity_alert_radius"),
+        ),
+    )
+
+
+def _venue_summary(venue: dict[str, Any]) -> str:
+    lines = _payload_kv_lines(venue, ("title", "address", "foursquare_id", "foursquare_type", "google_place_id", "google_place_type"))
+    location = venue.get("location")
+    if isinstance(location, dict):
+        lines.extend(
+            "location_" + line
+            for line in _payload_kv_lines(
+                location,
+                ("latitude", "longitude", "horizontal_accuracy"),
+            )
+        )
+    return _payload_section("Telegram venue", lines)
+
+
+def _poll_summary(poll: dict[str, Any]) -> str:
+    lines = _payload_kv_lines(
+        poll,
+        (
+            "id",
+            "question",
+            "type",
+            "is_anonymous",
+            "allows_multiple_answers",
+            "is_closed",
+            "total_voter_count",
+            "correct_option_id",
+            "explanation",
+        ),
+    )
+    options = poll.get("options")
+    if isinstance(options, list):
+        for index, option in enumerate(options):
+            if not isinstance(option, dict):
+                continue
+            text = _first_text(option.get("text")) or f"option {index + 1}"
+            voters = option.get("voter_count")
+            suffix = f" ({voters} votes)" if voters is not None else ""
+            lines.append(f"option_{index + 1}: {text}{suffix}")
+    return _payload_section("Telegram poll", lines)
+
+
+def _checklist_summary(checklist: dict[str, Any]) -> str:
+    lines = _payload_kv_lines(checklist, ("title", "others_can_add_tasks", "others_can_mark_tasks_as_done"))
+    tasks = checklist.get("tasks")
+    if isinstance(tasks, list):
+        for index, task in enumerate(tasks):
+            if not isinstance(task, dict):
+                continue
+            text = _first_text(task.get("text")) or f"task {index + 1}"
+            done = "done" if task.get("completion_date") or task.get("completed_by_user") or task.get("completed_by_chat") else "open"
+            task_id = task.get("id")
+            prefix = f"task_{task_id}" if task_id is not None else f"task_{index + 1}"
+            lines.append(f"{prefix}: [{done}] {text}")
+    return _payload_section("Telegram checklist", lines)
+
+
+def _paid_media_summary(paid_media: dict[str, Any]) -> str:
+    lines = _payload_kv_lines(paid_media, ("star_count",))
+    media = paid_media.get("paid_media")
+    if isinstance(media, list):
+        for index, item in enumerate(media):
+            if not isinstance(item, dict):
+                continue
+            media_type = _first_text(item.get("type")) or "unknown"
+            details = []
+            for key in ("width", "height", "duration"):
+                value = item.get(key)
+                if value is not None:
+                    details.append(f"{key}={value}")
+            suffix = f" ({', '.join(details)})" if details else ""
+            lines.append(f"media_{index + 1}: {media_type}{suffix}")
+    return _payload_section("Telegram paid media", lines)
+
+
+def _payload_section(title: str, lines: list[str]) -> str:
+    clean_lines = [line for line in lines if line]
+    if not clean_lines:
+        return title
+    return title + "\n" + "\n".join(clean_lines)
+
+
+def _payload_kv_lines(value: Any, keys: Iterable[str] | None = None) -> list[str]:
+    if isinstance(value, dict):
+        selected = list(keys) if keys is not None else [key for key in value if not str(key).endswith("_entities")]
+        lines = []
+        for key in selected:
+            if key not in value:
+                continue
+            rendered = _render_payload_value(value[key])
+            if rendered:
+                lines.append(f"{key}: {rendered}")
+        return lines
+    rendered = _render_payload_value(value)
+    return [rendered] if rendered else []
+
+
+def _render_payload_value(value: Any, *, limit: int = 700) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (str, int, float, bool)):
+        text = str(value)
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except TypeError:
+            text = str(value)
+    text = text.replace("\r", " ").strip()
+    if len(text) > limit:
+        return text[: limit - 3].rstrip() + "..."
+    return text
+
+
+_SERVICE_PAYLOAD_FIELDS = (
+    "new_chat_members",
+    "left_chat_member",
+    "new_chat_title",
+    "new_chat_photo",
+    "delete_chat_photo",
+    "group_chat_created",
+    "supergroup_chat_created",
+    "channel_chat_created",
+    "message_auto_delete_timer_changed",
+    "migrate_to_chat_id",
+    "migrate_from_chat_id",
+    "pinned_message",
+    "proximity_alert_triggered",
+    "boost_added",
+    "chat_background_set",
+    "forum_topic_created",
+    "forum_topic_edited",
+    "forum_topic_closed",
+    "forum_topic_reopened",
+    "general_forum_topic_hidden",
+    "general_forum_topic_unhidden",
+    "giveaway_created",
+    "giveaway",
+    "giveaway_winners",
+    "giveaway_completed",
+    "video_chat_scheduled",
+    "video_chat_started",
+    "video_chat_ended",
+    "video_chat_participants_invited",
+    "write_access_allowed",
+    "connected_website",
+    "passport_data",
+    "checklist_tasks_done",
+    "checklist_tasks_added",
+    "direct_message_price_changed",
+    "paid_message_price_changed",
+    "suggested_post_approved",
+    "suggested_post_approval_failed",
+    "suggested_post_declined",
+    "suggested_post_paid",
+    "suggested_post_refunded",
+)
 
 
 def _assistant_text(item: dict[str, Any]) -> str:
@@ -243,6 +646,22 @@ def _tool_name(value: str) -> str:
         "telegram.send_photo": "telegram_send_photo",
         "telegram.send_video": "telegram_send_video",
         "telegram.send_document": "telegram_send_document",
+        "telegram.send_animation": "telegram_send_animation",
+        "telegram.send_audio": "telegram_send_audio",
+        "telegram.send_voice": "telegram_send_voice",
+        "telegram.send_video_note": "telegram_send_video_note",
+        "telegram.send_sticker": "telegram_send_sticker",
+        "telegram.send_live_photo": "telegram_send_live_photo",
+        "telegram.send_media_group": "telegram_send_media_group",
+        "telegram.send_paid_media": "telegram_send_paid_media",
+        "telegram.send_contact": "telegram_send_contact",
+        "telegram.send_location": "telegram_send_location",
+        "telegram.send_venue": "telegram_send_venue",
+        "telegram.send_poll": "telegram_send_poll",
+        "telegram.send_checklist": "telegram_send_checklist",
+        "telegram.send_dice": "telegram_send_dice",
+        "telegram.copy_current_message": "telegram_copy_current_message",
+        "telegram.forward_current_message": "telegram_forward_current_message",
     }
     return aliases.get(value, value)
 

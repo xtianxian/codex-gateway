@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import mimetypes
 from io import BytesIO
 from typing import Any
@@ -167,6 +168,305 @@ class TelegramBotAPI:
             extra=extra,
         )
 
+    async def send_animation(
+        self,
+        chat_id: str | int,
+        animation: bytes | BytesIO,
+        *,
+        filename: str,
+        caption: str | None = None,
+        content_type: str | None = None,
+        duration: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> Any:
+        extra: dict[str, Any] = {}
+        if duration is not None:
+            extra["duration"] = duration
+        if width is not None:
+            extra["width"] = width
+        if height is not None:
+            extra["height"] = height
+        return await self._send_multipart_media(
+            "sendAnimation",
+            "animation",
+            chat_id,
+            animation,
+            filename=filename,
+            caption=caption,
+            content_type=content_type,
+            extra=extra,
+        )
+
+    async def send_audio(
+        self,
+        chat_id: str | int,
+        audio: bytes | BytesIO,
+        *,
+        filename: str,
+        caption: str | None = None,
+        content_type: str | None = None,
+        duration: int | None = None,
+        performer: str | None = None,
+        title: str | None = None,
+    ) -> Any:
+        extra: dict[str, Any] = {}
+        if duration is not None:
+            extra["duration"] = duration
+        if performer:
+            extra["performer"] = performer
+        if title:
+            extra["title"] = title
+        return await self._send_multipart_media(
+            "sendAudio",
+            "audio",
+            chat_id,
+            audio,
+            filename=filename,
+            caption=caption,
+            content_type=content_type,
+            extra=extra,
+        )
+
+    async def send_voice(
+        self,
+        chat_id: str | int,
+        voice: bytes | BytesIO,
+        *,
+        filename: str,
+        caption: str | None = None,
+        content_type: str | None = None,
+        duration: int | None = None,
+    ) -> Any:
+        extra: dict[str, Any] = {}
+        if duration is not None:
+            extra["duration"] = duration
+        return await self._send_multipart_media(
+            "sendVoice",
+            "voice",
+            chat_id,
+            voice,
+            filename=filename,
+            caption=caption,
+            content_type=content_type,
+            extra=extra,
+        )
+
+    async def send_video_note(
+        self,
+        chat_id: str | int,
+        video_note: bytes | BytesIO,
+        *,
+        filename: str,
+        content_type: str | None = None,
+        duration: int | None = None,
+        length: int | None = None,
+    ) -> Any:
+        extra: dict[str, Any] = {}
+        if duration is not None:
+            extra["duration"] = duration
+        if length is not None:
+            extra["length"] = length
+        return await self._send_multipart_media(
+            "sendVideoNote",
+            "video_note",
+            chat_id,
+            video_note,
+            filename=filename,
+            content_type=content_type,
+            extra=extra,
+        )
+
+    async def send_sticker(
+        self,
+        chat_id: str | int,
+        sticker: bytes | BytesIO,
+        *,
+        filename: str,
+        content_type: str | None = None,
+        emoji: str | None = None,
+    ) -> Any:
+        extra: dict[str, Any] = {}
+        if emoji:
+            extra["emoji"] = emoji
+        return await self._send_multipart_media(
+            "sendSticker",
+            "sticker",
+            chat_id,
+            sticker,
+            filename=filename,
+            content_type=content_type,
+            extra=extra,
+        )
+
+    async def send_live_photo(
+        self,
+        chat_id: str | int,
+        live_photo: bytes | BytesIO,
+        photo: bytes | BytesIO,
+        *,
+        live_photo_filename: str,
+        photo_filename: str,
+        caption: str | None = None,
+        live_photo_content_type: str | None = None,
+        photo_content_type: str | None = None,
+    ) -> Any:
+        data: dict[str, Any] = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = caption
+        return await self._send_multipart_files(
+            "sendLivePhoto",
+            data=data,
+            files={
+                "live_photo": (live_photo_filename, live_photo, live_photo_content_type),
+                "photo": (photo_filename, photo, photo_content_type),
+            },
+        )
+
+    async def send_media_group(
+        self,
+        chat_id: str | int,
+        media: list[dict[str, Any]],
+        *,
+        files: dict[str, tuple[str, bytes | BytesIO, str | None]] | None = None,
+    ) -> Any:
+        payload: dict[str, Any] = {"chat_id": chat_id, "media": media}
+        if files:
+            return await self._send_multipart_files(
+                "sendMediaGroup",
+                data={"chat_id": str(chat_id), "media": media},
+                files=files,
+            )
+        return await self._request("sendMediaGroup", payload)
+
+    async def send_paid_media(
+        self,
+        chat_id: str | int,
+        star_count: int,
+        media: list[dict[str, Any]],
+        *,
+        caption: str | None = None,
+        payload: str | None = None,
+        files: dict[str, tuple[str, bytes | BytesIO, str | None]] | None = None,
+    ) -> Any:
+        request_payload: dict[str, Any] = {"chat_id": chat_id, "star_count": star_count, "media": media}
+        if caption:
+            request_payload["caption"] = caption
+        if payload:
+            request_payload["payload"] = payload
+        if files:
+            return await self._send_multipart_files(
+                "sendPaidMedia",
+                data=request_payload,
+                files=files,
+            )
+        return await self._request("sendPaidMedia", request_payload)
+
+    async def send_contact(
+        self,
+        chat_id: str | int,
+        phone_number: str,
+        first_name: str,
+        *,
+        last_name: str | None = None,
+        vcard: str | None = None,
+    ) -> Any:
+        payload: dict[str, Any] = {"chat_id": chat_id, "phone_number": phone_number, "first_name": first_name}
+        if last_name:
+            payload["last_name"] = last_name
+        if vcard:
+            payload["vcard"] = vcard
+        return await self._request("sendContact", payload)
+
+    async def send_location(
+        self,
+        chat_id: str | int,
+        latitude: float,
+        longitude: float,
+        **options: Any,
+    ) -> Any:
+        payload: dict[str, Any] = {"chat_id": chat_id, "latitude": latitude, "longitude": longitude}
+        payload.update({key: value for key, value in options.items() if value is not None})
+        return await self._request("sendLocation", payload)
+
+    async def send_venue(
+        self,
+        chat_id: str | int,
+        latitude: float,
+        longitude: float,
+        title: str,
+        address: str,
+        **options: Any,
+    ) -> Any:
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "latitude": latitude,
+            "longitude": longitude,
+            "title": title,
+            "address": address,
+        }
+        payload.update({key: value for key, value in options.items() if value is not None})
+        return await self._request("sendVenue", payload)
+
+    async def send_poll(
+        self,
+        chat_id: str | int,
+        question: str,
+        options: list[str] | list[dict[str, Any]],
+        **settings: Any,
+    ) -> Any:
+        normalized_options: list[str] | list[dict[str, Any]]
+        if all(isinstance(option, str) for option in options):
+            normalized_options = [{"text": str(option)} for option in options]
+        else:
+            normalized_options = options
+        payload: dict[str, Any] = {"chat_id": chat_id, "question": question, "options": normalized_options}
+        payload.update({key: value for key, value in settings.items() if value is not None})
+        return await self._request("sendPoll", payload)
+
+    async def send_checklist(
+        self,
+        chat_id: str | int,
+        business_connection_id: str,
+        checklist: dict[str, Any],
+    ) -> Any:
+        return await self._request(
+            "sendChecklist",
+            {
+                "chat_id": chat_id,
+                "business_connection_id": business_connection_id,
+                "checklist": checklist,
+            },
+        )
+
+    async def send_dice(self, chat_id: str | int, *, emoji: str | None = None) -> Any:
+        payload: dict[str, Any] = {"chat_id": chat_id}
+        if emoji:
+            payload["emoji"] = emoji
+        return await self._request("sendDice", payload)
+
+    async def copy_message(
+        self,
+        chat_id: str | int,
+        from_chat_id: str | int,
+        message_id: int,
+        **options: Any,
+    ) -> Any:
+        payload: dict[str, Any] = {"chat_id": chat_id, "from_chat_id": from_chat_id, "message_id": message_id}
+        payload.update({key: value for key, value in options.items() if value is not None})
+        return await self._request("copyMessage", payload)
+
+    async def forward_message(
+        self,
+        chat_id: str | int,
+        from_chat_id: str | int,
+        message_id: int,
+        **options: Any,
+    ) -> Any:
+        payload: dict[str, Any] = {"chat_id": chat_id, "from_chat_id": from_chat_id, "message_id": message_id}
+        payload.update({key: value for key, value in options.items() if value is not None})
+        return await self._request("forwardMessage", payload)
+
     async def set_my_commands(self, commands: list[dict[str, str]]) -> Any:
         return await self._request("setMyCommands", {"commands": commands})
 
@@ -241,21 +541,48 @@ class TelegramBotAPI:
         content_type: str | None = None,
         extra: dict[str, Any] | None = None,
     ) -> Any:
-        url = f"{self.base_url}/bot{self.token}/{method}"
         data: dict[str, Any] = {"chat_id": str(chat_id)}
         if caption:
             data["caption"] = caption
         for key, value in (extra or {}).items():
             if value is not None:
-                data[key] = str(value)
+                data[key] = _multipart_value(value)
         raw = media.getvalue() if isinstance(media, BytesIO) else media
         resolved_content_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        try:
-            response = await self.client.post(
-                url,
-                data=data,
-                files={field_name: (filename, raw, resolved_content_type)},
+        return await self._post_multipart(
+            method,
+            data=data,
+            files={field_name: (filename, raw, resolved_content_type)},
+        )
+
+    async def _send_multipart_files(
+        self,
+        method: str,
+        *,
+        data: dict[str, Any],
+        files: dict[str, tuple[str, bytes | BytesIO, str | None]],
+    ) -> Any:
+        file_payload: dict[str, tuple[str, bytes, str]] = {}
+        for field_name, (filename, raw, content_type) in files.items():
+            resolved_content_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            file_payload[field_name] = (
+                filename,
+                raw.getvalue() if isinstance(raw, BytesIO) else raw,
+                resolved_content_type,
             )
+        return await self._post_multipart(method, data=data, files=file_payload)
+
+    async def _post_multipart(
+        self,
+        method: str,
+        *,
+        data: dict[str, Any],
+        files: dict[str, tuple[str, bytes, str]],
+    ) -> Any:
+        url = f"{self.base_url}/bot{self.token}/{method}"
+        form_data = {key: _multipart_value(value) for key, value in data.items() if value is not None}
+        try:
+            response = await self.client.post(url, data=form_data, files=files)
         except httpx.HTTPError as exc:
             detail = str(exc) or exc.__class__.__name__
             raise TelegramAPIError(self._redact(f"Telegram API {method} failed: {detail}")) from exc
@@ -281,3 +608,11 @@ def chunk_text(text: str, *, limit: int = MAX_TELEGRAM_TEXT) -> list[str]:
     if text == "":
         return [""]
     return [text[index : index + limit] for index in range(0, len(text), limit)]
+
+
+def _multipart_value(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, separators=(",", ":"))
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)

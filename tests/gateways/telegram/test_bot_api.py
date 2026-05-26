@@ -286,6 +286,143 @@ async def test_send_photo_and_video_use_native_multipart_payloads() -> None:
 
 
 @pytest.mark.asyncio
+async def test_additional_media_methods_use_native_multipart_payloads() -> None:
+    requests: list[tuple[str, bytes]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.url.path, request.content))
+        method = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": len(requests), "method": method}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.telegram.org")
+    api = TelegramBotAPI("test-token", client=client)
+
+    assert (await api.send_animation(42, b"gif", filename="loop.gif", caption="Loop", duration=2))["method"] == "sendAnimation"
+    assert (
+        await api.send_audio(
+            42,
+            b"mp3",
+            filename="song.mp3",
+            caption="Song",
+            duration=30,
+            performer="Ada",
+            title="Theme",
+        )
+    )["method"] == "sendAudio"
+    assert (await api.send_voice(42, b"ogg", filename="voice.ogg", duration=5))["method"] == "sendVoice"
+    assert (await api.send_video_note(42, b"mp4", filename="note.mp4", duration=4, length=240))["method"] == "sendVideoNote"
+    assert (await api.send_sticker(42, b"webp", filename="smile.webp", emoji=":)"))["method"] == "sendSticker"
+
+    assert [path.rsplit("/", 1)[-1] for path, _body in requests] == [
+        "sendAnimation",
+        "sendAudio",
+        "sendVoice",
+        "sendVideoNote",
+        "sendSticker",
+    ]
+    assert b'name="animation"; filename="loop.gif"' in requests[0][1]
+    assert b'name="performer"' in requests[1][1]
+    assert b"Ada" in requests[1][1]
+    assert b'name="voice"; filename="voice.ogg"' in requests[2][1]
+    assert b'name="length"' in requests[3][1]
+    assert b'name="sticker"; filename="smile.webp"' in requests[4][1]
+    assert b'name="emoji"' in requests[4][1]
+
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_live_photo_media_group_and_paid_media_use_multipart_payloads() -> None:
+    requests: list[tuple[str, bytes]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.url.path, request.content))
+        method = request.url.path.rsplit("/", 1)[-1]
+        result: object
+        if method == "sendMediaGroup":
+            result = [{"message_id": 1}, {"message_id": 2}]
+        else:
+            result = {"message_id": len(requests), "method": method}
+        return httpx.Response(200, json={"ok": True, "result": result})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.telegram.org")
+    api = TelegramBotAPI("test-token", client=client)
+
+    await api.send_live_photo(
+        42,
+        b"live",
+        b"still",
+        live_photo_filename="live.mp4",
+        photo_filename="still.jpg",
+        caption="Live",
+    )
+    await api.send_media_group(
+        42,
+        [{"type": "photo", "media": "attach://media0"}],
+        files={"media0": ("photo.jpg", b"photo", "image/jpeg")},
+    )
+    await api.send_paid_media(
+        42,
+        5,
+        [{"type": "video", "media": "attach://media0"}],
+        caption="Paid",
+        payload="payload",
+        files={"media0": ("paid.mp4", b"paid", "video/mp4")},
+    )
+
+    assert requests[0][0].endswith("/sendLivePhoto")
+    assert b'name="live_photo"; filename="live.mp4"' in requests[0][1]
+    assert b'name="photo"; filename="still.jpg"' in requests[0][1]
+    assert requests[1][0].endswith("/sendMediaGroup")
+    assert b'name="media"' in requests[1][1]
+    assert b"attach://media0" in requests[1][1]
+    assert requests[2][0].endswith("/sendPaidMedia")
+    assert b'name="star_count"' in requests[2][1]
+    assert b"\r\n\r\n5\r\n" in requests[2][1]
+    assert b'name="payload"' in requests[2][1]
+
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_structured_and_reuse_methods_use_json_payloads() -> None:
+    requests: list[tuple[str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.url.path.rsplit("/", 1)[-1], json.loads(request.content)))
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": len(requests)}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.telegram.org")
+    api = TelegramBotAPI("test-token", client=client)
+
+    await api.send_contact(42, "+15551212", "Ada", last_name="Lovelace")
+    await api.send_location(42, 14.6, 121.0, horizontal_accuracy=12.5)
+    await api.send_venue(42, 14.6, 121.0, "HQ", "Main St")
+    await api.send_poll(42, "Ship?", ["Yes", "No"], is_anonymous=False)
+    await api.send_checklist(42, "biz_1", {"title": "Launch", "tasks": [{"id": 1, "text": "Test"}]})
+    await api.send_dice(42, emoji="🎲")
+    await api.copy_message(42, 42, 10, caption="Copy")
+    await api.forward_message(42, 42, 10)
+
+    assert [method for method, _payload in requests] == [
+        "sendContact",
+        "sendLocation",
+        "sendVenue",
+        "sendPoll",
+        "sendChecklist",
+        "sendDice",
+        "copyMessage",
+        "forwardMessage",
+    ]
+    assert requests[0][1]["phone_number"] == "+15551212"
+    assert requests[3][1]["options"] == [{"text": "Yes"}, {"text": "No"}]
+    assert requests[4][1]["business_connection_id"] == "biz_1"
+    assert requests[6][1]["message_id"] == 10
+
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_token_is_redacted_from_errors() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"ok": False, "description": "bad token test-token"})
