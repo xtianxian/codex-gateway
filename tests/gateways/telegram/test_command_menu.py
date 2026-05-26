@@ -97,7 +97,7 @@ async def test_commands_command_syncs_menu_and_returns_short_confirmation(tmp_pa
     settings = menu_settings(tmp_path)
     store = TelegramStateStore(settings.state_dir)
     access = AccessManager(store)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     bot = MenuFakeBot()
     bridge = TelegramBridge(settings, store, access, bot, MenuFakeAppServer())
 
@@ -107,7 +107,7 @@ async def test_commands_command_syncs_menu_and_returns_short_confirmation(tmp_pa
             "message": {
                 "message_id": 10,
                 "chat": {"id": 42, "type": "private"},
-                "from": {"id": 123, "username": "xtian"},
+                "from": {"id": 123, "username": "gatewayuser"},
                 "text": "/commands",
             },
         }
@@ -128,7 +128,7 @@ async def test_command_menu_sync_failure_is_reported_without_crashing(tmp_path: 
     settings = menu_settings(tmp_path)
     store = TelegramStateStore(settings.state_dir)
     access = AccessManager(store)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     bot = FailingMenuFakeBot()
     bridge = TelegramBridge(settings, store, access, bot, MenuFakeAppServer())
 
@@ -142,7 +142,7 @@ async def test_command_menu_sync_failure_is_reported_without_crashing(tmp_path: 
             "message": {
                 "message_id": 10,
                 "chat": {"id": 42, "type": "private"},
-                "from": {"id": 123, "username": "xtian"},
+                "from": {"id": 123, "username": "gatewayuser"},
                 "text": "/commands",
             },
         }

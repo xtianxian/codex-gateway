@@ -648,7 +648,7 @@ class FakeAppServer:
                     "skills": [
                         {
                             "name": "skill-creator",
-                            "path": r"C:\Users\xtian\.codex\skills\skill-creator\SKILL.md",
+                            "path": r"C:\Users\gatewayuser\.codex\skills\skill-creator\SKILL.md",
                         }
                     ],
                     "errors": [],
@@ -839,7 +839,7 @@ def message_update(text: str, *, chat_id: int = 42, user_id: int = 123, message_
         "message": {
             "message_id": message_id,
             "chat": {"id": chat_id, "type": "private"},
-            "from": {"id": user_id, "username": "xtian"},
+            "from": {"id": user_id, "username": "gatewayuser"},
             "text": text,
         },
     }
@@ -850,7 +850,7 @@ def callback_update(data: str, *, chat_id: int = 42, user_id: int = 123, message
         "update_id": message_id + 1,
         "callback_query": {
             "id": "cb_1",
-            "from": {"id": user_id, "username": "xtian"},
+            "from": {"id": user_id, "username": "gatewayuser"},
             "message": {"message_id": message_id, "chat": {"id": chat_id}},
             "data": data,
         },
@@ -1074,7 +1074,7 @@ def test_telegram_server_request_support_table_matches_generated_schema() -> Non
 @pytest.mark.asyncio
 async def test_approved_text_message_starts_thread_and_turn(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("Reply exactly OK"))
 
@@ -1090,7 +1090,7 @@ async def test_approved_text_message_starts_thread_and_turn(tmp_path: Path) -> N
 @pytest.mark.asyncio
 async def test_configured_default_permission_profile_applies_to_new_threads_and_turns(tmp_path: Path) -> None:
     bridge, _bot, app_server, _store, access = bridge_for(tmp_path, permission_profile=":auto-review")
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("use configured permissions"))
 
@@ -1103,7 +1103,7 @@ async def test_configured_default_permission_profile_applies_to_new_threads_and_
 @pytest.mark.asyncio
 async def test_ordinary_message_is_rejected_while_turn_is_active(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("first turn"))
     await bridge.handle_update(message_update("second turn", message_id=11))
@@ -1153,7 +1153,7 @@ async def test_ordinary_message_is_rejected_while_turn_is_active(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_disabled_commands_are_guarded_while_turn_is_active(tmp_path: Path, command_text: str) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("first turn"))
     before_calls = fake_app_server_call_counts(app_server)
@@ -1173,7 +1173,7 @@ async def test_disabled_commands_are_guarded_while_turn_is_active(tmp_path: Path
 @pytest.mark.asyncio
 async def test_read_only_commands_still_work_while_turn_is_active(tmp_path: Path, command_text: str) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("first turn"))
     await bridge.handle_update(message_update(command_text, message_id=11))
@@ -1185,7 +1185,7 @@ async def test_read_only_commands_still_work_while_turn_is_active(tmp_path: Path
 @pytest.mark.asyncio
 async def test_typing_chat_action_runs_during_turn_and_stops_on_completion(tmp_path: Path) -> None:
     bridge, bot, _app_server, _store, access = bridge_for_typing(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("Reply exactly OK"))
     await asyncio.sleep(0)
@@ -1213,7 +1213,7 @@ async def test_typing_chat_action_runs_during_turn_and_stops_on_completion(tmp_p
 @pytest.mark.asyncio
 async def test_typing_chat_action_stops_when_approval_is_requested(tmp_path: Path) -> None:
     bridge, bot, _app_server, _store, access = bridge_for_typing(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("run tests"))
     await asyncio.sleep(0)
@@ -1233,7 +1233,7 @@ async def test_typing_chat_action_stops_when_approval_is_requested(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_typing_chat_action_resumes_after_approval_accept(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for_typing(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("run tests"))
     await asyncio.sleep(0)
@@ -1257,7 +1257,7 @@ async def test_typing_chat_action_resumes_after_approval_accept(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_existing_thread_mapping_resumes_before_turn_start(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     store.save_threads(
         {
             TelegramStateStore.thread_key(42, bridge.settings.default_cwd): {
@@ -1283,7 +1283,7 @@ async def test_existing_thread_mapping_resumes_before_turn_start(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_configured_default_permission_profile_applies_to_resumed_threads(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path, permission_profile=":auto-review")
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     store.save_threads(
         {
             TelegramStateStore.thread_key(42, bridge.settings.default_cwd): {
@@ -1306,7 +1306,7 @@ async def test_configured_default_permission_profile_applies_to_resumed_threads(
 @pytest.mark.asyncio
 async def test_stale_thread_mapping_starts_replacement_thread_when_resume_fails(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     store.save_threads(
         {
             TelegramStateStore.thread_key(42, bridge.settings.default_cwd): {
@@ -1334,7 +1334,7 @@ async def test_stale_thread_mapping_starts_replacement_thread_when_resume_fails(
 @pytest.mark.asyncio
 async def test_thread_mapping_with_stale_dynamic_tools_starts_replacement_thread(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     store.save_threads(
         {
             TelegramStateStore.thread_key(42, bridge.settings.default_cwd): {
@@ -1446,7 +1446,7 @@ async def test_local_slash_commands_send_valid_bot_messages_without_app_server_c
     command_text: str,
 ) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update(command_text))
 
@@ -1462,7 +1462,7 @@ async def test_local_slash_commands_send_valid_bot_messages_without_app_server_c
 @pytest.mark.asyncio
 async def test_help_and_start_show_grouped_command_reference(tmp_path: Path, command_text: str) -> None:
     bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update(command_text))
 
@@ -1496,7 +1496,7 @@ async def test_codex_turn_slash_commands_start_valid_turn_requests(
     expected_prompt: str,
 ) -> None:
     bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update(command_text))
 
@@ -1508,7 +1508,7 @@ async def test_codex_turn_slash_commands_start_valid_turn_requests(
 @pytest.mark.asyncio
 async def test_rollback_uses_app_server_thread_history_rollback(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("hi"))
     await complete_active_turn(bridge)
@@ -1521,7 +1521,7 @@ async def test_rollback_uses_app_server_thread_history_rollback(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_model_approval_permission_mode_goal_and_rename_commands_update_thread_settings(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/model gpt-5.1 high"))
     await bridge.handle_update(message_update("/approval never", message_id=11))
@@ -1565,7 +1565,7 @@ async def test_model_approval_permission_mode_goal_and_rename_commands_update_th
 @pytest.mark.asyncio
 async def test_cli_parity_app_server_commands_and_callbacks(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("hi"))
     await complete_active_turn(bridge)
@@ -1591,7 +1591,7 @@ async def test_cli_parity_app_server_commands_and_callbacks(tmp_path: Path) -> N
         {
             "enabled": False,
             "name": None,
-            "path": r"C:\Users\xtian\.codex\skills\skill-creator\SKILL.md",
+            "path": r"C:\Users\gatewayuser\.codex\skills\skill-creator\SKILL.md",
         }
     ]
 
@@ -1609,7 +1609,7 @@ async def test_cli_parity_app_server_commands_and_callbacks(tmp_path: Path) -> N
 @pytest.mark.asyncio
 async def test_approve_tracks_guardian_denials_and_approves_selected_action(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
     event = {
         "threadId": "thr_1",
@@ -1630,7 +1630,7 @@ async def test_approve_tracks_guardian_denials_and_approves_selected_action(tmp_
 @pytest.mark.asyncio
 async def test_mode_command_uses_default_model_when_collaboration_mode_has_no_model(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     async def live_shape_collaboration_mode_list() -> dict[str, Any]:
         app_server.mode_lists.append({})
@@ -1665,7 +1665,7 @@ async def test_mode_command_uses_default_model_when_collaboration_mode_has_no_mo
 @pytest.mark.asyncio
 async def test_plan_command_preserves_built_in_plan_developer_instructions(tmp_path: Path) -> None:
     bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/plan inspect first"))
 
@@ -1690,7 +1690,7 @@ async def test_plan_command_preserves_built_in_plan_developer_instructions(tmp_p
 @pytest.mark.asyncio
 async def test_model_command_rejects_unknown_model_before_updating_thread(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/model gpt-5.4-minis"))
 
@@ -1704,7 +1704,7 @@ async def test_model_command_rejects_unknown_model_before_updating_thread(tmp_pa
 @pytest.mark.asyncio
 async def test_model_command_with_model_only_prompts_for_reasoning_effort(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/model gpt-5.1"))
 
@@ -1720,7 +1720,7 @@ async def test_model_command_with_model_only_prompts_for_reasoning_effort(tmp_pa
 @pytest.mark.asyncio
 async def test_legacy_effort_command_still_updates_reasoning_effort_without_menu(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/effort extra high"))
 
@@ -1768,7 +1768,7 @@ async def test_no_arg_setting_commands_render_inline_selection_buttons(
     expected_actions: dict[str, tuple[str, Any]],
 ) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update(command_text))
 
@@ -1797,7 +1797,7 @@ async def test_no_arg_setting_commands_render_inline_selection_buttons(
 @pytest.mark.asyncio
 async def test_permissions_menu_matches_cli_profiles_without_approval_buttons(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     async def real_shape_permission_profile_list(**kwargs: Any) -> dict[str, Any]:
         app_server.permission_profile_lists.append(kwargs)
@@ -1833,7 +1833,7 @@ async def test_permissions_menu_matches_cli_profiles_without_approval_buttons(tm
 @pytest.mark.asyncio
 async def test_empty_model_and_mode_selectors_send_empty_state_without_pending_callbacks(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     async def empty_model_list(**kwargs: Any) -> dict[str, Any]:
         app_server.model_lists.append(kwargs)
@@ -1892,7 +1892,7 @@ async def test_selection_callbacks_apply_each_setting_and_clear_pending_group(
     expected_update: dict[str, Any],
 ) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update(command_text))
     buttons = inline_button_map(bot.messages[-1])
 
@@ -1911,7 +1911,7 @@ async def test_selection_cancel_clears_each_pending_group_without_app_server_set
     command_text: str,
 ) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update(command_text))
     buttons = inline_button_map(bot.messages[-1])
 
@@ -1928,7 +1928,7 @@ async def test_selection_cancel_clears_each_pending_group_without_app_server_set
 @pytest.mark.asyncio
 async def test_model_selection_then_reasoning_selection_applies_both_settings(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("/model"))
     buttons = inline_button_map(bot.messages[-1])
 
@@ -1954,7 +1954,7 @@ async def test_model_selection_then_reasoning_selection_applies_both_settings(tm
 @pytest.mark.asyncio
 async def test_saved_model_selection_applies_to_new_threads(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/model gpt-5.1 high"))
     await bridge.handle_update(message_update("/new", message_id=11))
@@ -1976,7 +1976,7 @@ async def test_setup_model_preference_applies_to_new_threads(tmp_path: Path) -> 
         model="gpt-5.4-mini",
         model_reasoning_effort="medium",
     )
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("start with configured model"))
 
@@ -1991,7 +1991,7 @@ async def test_setup_model_preference_applies_to_new_threads(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_model_selection_is_scoped_to_active_collaboration_mode(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     async def model_list(**kwargs: Any) -> dict[str, Any]:
         app_server.model_lists.append(kwargs)
@@ -2048,7 +2048,7 @@ async def test_model_selection_is_scoped_to_active_collaboration_mode(tmp_path: 
 @pytest.mark.asyncio
 async def test_new_thread_uses_active_plan_mode_model_and_effort(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     async def model_list(**kwargs: Any) -> dict[str, Any]:
         app_server.model_lists.append(kwargs)
@@ -2098,7 +2098,7 @@ async def test_new_thread_uses_active_plan_mode_model_and_effort(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_stale_replacement_replays_saved_thread_preferences(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     key = TelegramStateStore.thread_key(42, bridge.settings.default_cwd)
     store.save_threads(
         {
@@ -2158,7 +2158,7 @@ async def test_stale_replacement_replays_saved_thread_preferences(tmp_path: Path
 @pytest.mark.asyncio
 async def test_clear_preserves_saved_preferences_for_next_thread(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/model gpt-5.1 high"))
     await bridge.handle_update(message_update("/clear", message_id=11))
@@ -2180,7 +2180,7 @@ async def test_clear_preserves_saved_preferences_for_next_thread(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_reset_clears_saved_thread_preferences(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/model gpt-5.1 high"))
     await bridge.handle_update(message_update("/reset", message_id=11))
@@ -2198,7 +2198,7 @@ async def test_reset_clears_saved_thread_preferences(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_selection_callback_default_permission_sets_workspace_profile(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("/permissions read-only"))
     await bridge.handle_update(message_update("/permissions", message_id=11))
     buttons = inline_button_map(bot.messages[-1])
@@ -2216,7 +2216,7 @@ async def test_selection_callback_default_permission_sets_workspace_profile(tmp_
 @pytest.mark.asyncio
 async def test_effort_without_arguments_points_to_model_flow(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/effort"))
 
@@ -2229,7 +2229,7 @@ async def test_effort_without_arguments_points_to_model_flow(tmp_path: Path) -> 
 async def test_selection_callback_rejects_unknown_expired_and_other_user(tmp_path: Path) -> None:
     now = datetime(2026, 5, 24, tzinfo=timezone.utc)
     bridge, bot, app_server, store, access = bridge_for(tmp_path, now=now)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("/approval"))
     buttons = inline_button_map(bot.messages[-1])
 
@@ -2254,7 +2254,7 @@ async def test_selection_callback_rejects_unknown_expired_and_other_user(tmp_pat
 @pytest.mark.asyncio
 async def test_permissions_default_uses_workspace_profile_for_subsequent_turns(tmp_path: Path) -> None:
     bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/permissions read-only"))
     await bridge.handle_update(message_update("/permissions default", message_id=11))
@@ -2287,7 +2287,7 @@ async def test_typed_permission_command_resolves_real_app_server_profile_ids(
     expected_profile: str,
 ) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     async def real_shape_permission_profile_list(**kwargs: Any) -> dict[str, Any]:
         app_server.permission_profile_lists.append(kwargs)
@@ -2318,7 +2318,7 @@ async def test_typed_permission_command_resolves_real_app_server_profile_ids(
 @pytest.mark.asyncio
 async def test_cancel_and_steer_use_active_in_memory_turn(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/cancel"))
     await bridge.handle_update(message_update("/steer keep going", message_id=11))
@@ -2363,7 +2363,7 @@ async def test_slash_commands_report_missing_or_invalid_arguments(
     expected_fragment: str,
 ) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update(command_text))
 
@@ -2379,7 +2379,7 @@ async def test_unsupported_terminal_commands_return_local_gateway_message(
     command_name: str,
 ) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update(f"/{command_name}"))
 
@@ -2400,7 +2400,7 @@ async def test_unknown_slash_commands_return_local_gateway_message(
     command_name: str,
 ) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update(f"/{command_name}"))
 
@@ -2430,7 +2430,7 @@ async def test_direct_app_server_list_and_read_commands_are_formatted(
     expected_fragment: str,
 ) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update(command_text))
 
@@ -2454,7 +2454,7 @@ async def test_direct_app_server_list_commands_report_empty_results(
     expected_fragment: str,
 ) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     async def empty_model_list(**kwargs: Any) -> dict[str, Any]:
         app_server.model_lists.append(kwargs)
@@ -2490,7 +2490,7 @@ async def test_direct_app_server_list_commands_report_empty_results(
 @pytest.mark.asyncio
 async def test_apps_command_reports_feature_gated_forbidden_response(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     async def forbidden_apps(**_kwargs: Any) -> dict[str, Any]:
         raise JsonRpcError("failed to list apps: Request failed with status 403 Forbidden")
@@ -2505,7 +2505,7 @@ async def test_apps_command_reports_feature_gated_forbidden_response(tmp_path: P
 @pytest.mark.asyncio
 async def test_mcp_reload_uses_config_reload_method(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/mcp reload"))
 
@@ -2516,7 +2516,7 @@ async def test_mcp_reload_uses_config_reload_method(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_threads_uses_app_server_list_and_local_fallback(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     app_server.thread_list_result = {
         "data": [
             {
@@ -2555,7 +2555,7 @@ async def test_threads_uses_app_server_list_and_local_fallback(tmp_path: Path) -
 @pytest.mark.asyncio
 async def test_threads_and_resume_use_thread_read_snippet_when_title_is_missing(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     app_server.thread_list_result = {"data": [{"id": "thr_remote", "cwd": str(bridge.settings.default_cwd)}]}
     prompt = (
         "A previous agent produced the plan below to accomplish the user's task. "
@@ -2586,7 +2586,7 @@ async def test_threads_and_resume_use_thread_read_snippet_when_title_is_missing(
 @pytest.mark.asyncio
 async def test_exec_command_is_rejected_when_not_enabled(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/exec python -V"))
 
@@ -2598,7 +2598,7 @@ async def test_exec_command_is_rejected_when_not_enabled(tmp_path: Path) -> None
 @pytest.mark.asyncio
 async def test_exec_command_starts_turn_when_enabled(tmp_path: Path) -> None:
     bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     object.__setattr__(bridge.settings, "enable_exec", True)
 
     await bridge.handle_update(message_update("/exec python -V"))
@@ -2611,7 +2611,7 @@ async def test_exec_command_starts_turn_when_enabled(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_workspace_set_changes_active_workspace_and_thread_mapping(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     repo_b = bridge.settings.allowed_roots[0] / "repo-b"
     repo_b.mkdir()
 
@@ -2627,7 +2627,7 @@ async def test_workspace_set_changes_active_workspace_and_thread_mapping(tmp_pat
 @pytest.mark.asyncio
 async def test_setcwd_alias_changes_active_workspace(tmp_path: Path) -> None:
     bridge, bot, _app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     repo_b = bridge.settings.allowed_roots[0] / "repo-b"
     repo_b.mkdir()
 
@@ -2641,7 +2641,7 @@ async def test_setcwd_alias_changes_active_workspace(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_new_command_starts_fresh_thread_for_active_workspace(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("first turn"))
     await complete_active_turn(bridge)
 
@@ -2656,7 +2656,7 @@ async def test_new_command_starts_fresh_thread_for_active_workspace(tmp_path: Pa
 @pytest.mark.asyncio
 async def test_workspace_persists_across_start_new_and_clear_until_reset(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     repo_b = bridge.settings.allowed_roots[0] / "repo-b"
     repo_b.mkdir()
 
@@ -2683,7 +2683,7 @@ async def test_workspace_persists_across_start_new_and_clear_until_reset(tmp_pat
 @pytest.mark.asyncio
 async def test_completed_first_turn_auto_names_new_thread_from_user_prompt(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     prompt = (
         "A previous agent produced the plan below to accomplish the user's task. "
         "Implement the plan in a fresh context with focused tests."
@@ -2711,7 +2711,7 @@ async def test_completed_first_turn_auto_names_new_thread_from_user_prompt(tmp_p
 @pytest.mark.asyncio
 async def test_completed_turn_reply_does_not_wait_for_auto_name_request(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     name_started = asyncio.Event()
     release_name = asyncio.Event()
 
@@ -2748,7 +2748,7 @@ async def test_completed_turn_reply_does_not_wait_for_auto_name_request(tmp_path
 @pytest.mark.asyncio
 async def test_resume_lists_current_thread_with_inline_button(tmp_path: Path) -> None:
     bridge, bot, _app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     store.save_threads(
         {
             TelegramStateStore.thread_key(42, bridge.settings.default_cwd): {
@@ -2769,7 +2769,7 @@ async def test_resume_lists_current_thread_with_inline_button(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_resume_callback_selects_thread_mapping(tmp_path: Path) -> None:
     bridge, bot, _app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     store.save_threads(
         {
             TelegramStateStore.thread_key(42, bridge.settings.default_cwd): {
@@ -2791,7 +2791,7 @@ async def test_resume_callback_selects_thread_mapping(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_tampered_active_workspace_outside_allowed_roots_is_reset(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     store.save_chats(
         {
             TelegramStateStore.chat_key(42): {
@@ -2810,7 +2810,7 @@ async def test_tampered_active_workspace_outside_allowed_roots_is_reset(tmp_path
 @pytest.mark.asyncio
 async def test_document_download_is_stored_safely_and_sent_to_codex(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     bot.files["file_1"] = {"file_path": "docs/note.txt", "file_size": 4}
     bot.downloads["docs/note.txt"] = b"note"
     update = message_update("summarize", message_id=12)
@@ -2831,7 +2831,7 @@ async def test_document_download_is_stored_safely_and_sent_to_codex(tmp_path: Pa
 @pytest.mark.asyncio
 async def test_image_document_download_is_sent_to_codex_as_local_image(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     bot.files["image_1"] = {"file_path": "docs/hair.png", "file_size": 7}
     bot.downloads["docs/hair.png"] = b"pngdata"
     update = message_update("make the hair red", message_id=14)
@@ -2858,7 +2858,7 @@ async def test_image_document_download_is_sent_to_codex_as_local_image(tmp_path:
 @pytest.mark.asyncio
 async def test_photo_attachment_download_uses_largest_variant_and_caption_text(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     bot.files["photo_big"] = {"file_path": "photos/big.png", "file_size": 4}
     bot.downloads["photos/big.png"] = b"png"
     update = message_update("", message_id=13)
@@ -2977,7 +2977,7 @@ async def test_native_downloadable_payloads_are_stored_with_metadata(
     expected_text: str,
 ) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     bot.files[file_id] = {"file_path": file_path, "file_size": len(data)}
     bot.downloads[file_path] = data
     update = message_update("inspect", message_id=15)
@@ -3036,7 +3036,7 @@ async def test_structured_payloads_are_summarized_for_codex(
     unexpected: str | None,
 ) -> None:
     bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     update = message_update("", message_id=16)
     update["message"].update(payload)
 
@@ -3051,7 +3051,7 @@ async def test_structured_payloads_are_summarized_for_codex(
 @pytest.mark.asyncio
 async def test_inbound_poll_summary_includes_vote_counts(tmp_path: Path) -> None:
     bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     update = message_update("", message_id=17)
     update["message"]["poll"] = {
         "id": "poll_1",
@@ -3074,7 +3074,7 @@ async def test_inbound_poll_summary_includes_vote_counts(tmp_path: Path) -> None
 @pytest.mark.asyncio
 async def test_oversized_attachment_is_rejected_before_download(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     object.__setattr__(bridge.settings, "max_attachment_bytes", 3)
     update = message_update("summarize", message_id=12)
     update["message"]["document"] = {"file_id": "file_1", "file_name": "big.txt", "file_size": 4}
@@ -3088,7 +3088,7 @@ async def test_oversized_attachment_is_rejected_before_download(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_image_generation_output_is_sent_to_telegram_photo(tmp_path: Path) -> None:
     bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("make an image"))
     output = bridge.settings.default_cwd / "red-hair.png"
     output.write_bytes(b"edited-png")
@@ -3121,7 +3121,7 @@ async def test_image_generation_output_is_sent_to_telegram_photo(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_raw_image_generation_result_is_sent_to_telegram_photo(tmp_path: Path) -> None:
     bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("edit this image"))
     image_bytes = b"\x89PNG\r\n\x1a\nraw"
     item = {
@@ -3152,7 +3152,7 @@ async def test_raw_image_generation_result_is_sent_to_telegram_photo(tmp_path: P
 @pytest.mark.asyncio
 async def test_image_view_output_is_not_echoed_to_telegram(tmp_path: Path) -> None:
     bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("edit this image"))
     original = bridge.settings.default_cwd / "original.png"
     original.write_bytes(b"original-png")
@@ -3178,7 +3178,7 @@ async def test_image_view_output_is_not_echoed_to_telegram(tmp_path: Path) -> No
 @pytest.mark.asyncio
 async def test_event_rendering_uses_documented_agent_message_events(tmp_path: Path) -> None:
     bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
 
     await bridge.handle_app_event(
@@ -3218,7 +3218,7 @@ async def test_event_rendering_uses_documented_agent_message_events(tmp_path: Pa
 @pytest.mark.asyncio
 async def test_plan_updated_event_is_rendered_and_updated_in_telegram(tmp_path: Path) -> None:
     bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("/plan inspect"))
     context = bridge._active_turn_context("42")
     assert context is not None
@@ -3278,7 +3278,7 @@ async def test_plan_updated_event_is_rendered_and_updated_in_telegram(tmp_path: 
 @pytest.mark.asyncio
 async def test_completed_plan_item_is_rendered_to_telegram(tmp_path: Path) -> None:
     bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("make a plan"))
     context = bridge._active_turn_context("42")
     assert context is not None
@@ -3300,7 +3300,7 @@ async def test_completed_plan_item_is_rendered_to_telegram(tmp_path: Path) -> No
 @pytest.mark.asyncio
 async def test_completed_plan_prompts_for_cli_style_implementation_choice(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("/plan inspect"))
     context = bridge._active_turn_context("42")
     assert context is not None
@@ -3352,7 +3352,7 @@ async def test_completed_plan_prompts_for_cli_style_implementation_choice(tmp_pa
 @pytest.mark.asyncio
 async def test_plan_turn_suppresses_buffered_progress_message_after_plan(tmp_path: Path) -> None:
     bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("/plan inspect"))
     context = bridge._active_turn_context("42")
     assert context is not None
@@ -3387,7 +3387,7 @@ async def test_plan_turn_suppresses_buffered_progress_message_after_plan(tmp_pat
 @pytest.mark.asyncio
 async def test_clear_context_plan_choice_starts_fresh_default_thread(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("/plan inspect"))
     context = bridge._active_turn_context("42")
     assert context is not None
@@ -3424,7 +3424,7 @@ async def test_clear_context_plan_choice_starts_fresh_default_thread(tmp_path: P
 @pytest.mark.asyncio
 async def test_status_command_reports_codex_status_and_latest_thread_token_usage(tmp_path: Path) -> None:
     bridge, bot, _app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
 
     await bridge.handle_app_event(
@@ -3471,7 +3471,7 @@ async def test_status_command_reports_codex_status_and_latest_thread_token_usage
 @pytest.mark.asyncio
 async def test_status_command_reports_empty_context_state_before_usage_notification(tmp_path: Path) -> None:
     bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/status"))
 
@@ -3482,7 +3482,7 @@ async def test_status_command_reports_empty_context_state_before_usage_notificat
 @pytest.mark.asyncio
 async def test_event_rendering_suppresses_tool_chatter_but_reports_failures(tmp_path: Path) -> None:
     bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
 
     await bridge.handle_app_event(
@@ -3510,7 +3510,7 @@ async def test_event_rendering_suppresses_tool_chatter_but_reports_failures(tmp_
 @pytest.mark.asyncio
 async def test_approval_prompt_includes_reason_permissions_and_grant_root(tmp_path: Path) -> None:
     bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("run tests"))
 
     await bridge.handle_app_server_request(
@@ -3604,7 +3604,7 @@ async def test_contextual_server_requests_without_turn_context_send_errors(
 @pytest.mark.asyncio
 async def test_command_approval_request_and_accept_callback(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("run tests"))
 
     await bridge.handle_app_server_request(
@@ -3656,7 +3656,7 @@ async def test_command_and_file_approval_decline_and_cancel_callbacks_send_decis
     action: str,
 ) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("run tests"))
 
     await bridge.handle_app_server_request(AppServerEvent(method, params, request_id=78))
@@ -3673,7 +3673,7 @@ async def test_command_and_file_approval_decline_and_cancel_callbacks_send_decis
 @pytest.mark.asyncio
 async def test_permissions_approval_prompt_and_accept_callback_grants_turn_scope(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for_typing(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("needs permissions"))
     await asyncio.sleep(0)
     permissions = {
@@ -3722,7 +3722,7 @@ async def test_permissions_approval_decline_and_cancel_send_errors(
     action: str,
 ) -> None:
     bridge, bot, app_server, store, access = bridge_for_typing(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("needs permissions"))
     await bridge.handle_app_server_request(
         AppServerEvent(
@@ -3752,7 +3752,7 @@ async def test_permissions_approval_decline_and_cancel_send_errors(
 @pytest.mark.asyncio
 async def test_mcp_elicitation_request_sends_inline_prompt(tmp_path: Path) -> None:
     bridge, bot, _app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("save memory"))
 
     await bridge.handle_app_server_request(
@@ -3794,7 +3794,7 @@ async def test_mcp_elicitation_request_sends_inline_prompt(tmp_path: Path) -> No
 @pytest.mark.asyncio
 async def test_mcp_elicitation_accept_callback_sends_response(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("save memory"))
     await bridge.handle_app_server_request(
         AppServerEvent(
@@ -3824,7 +3824,7 @@ async def test_mcp_elicitation_accept_callback_sends_response(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_mcp_elicitation_decline_and_cancel_callbacks_send_response(tmp_path: Path, action: str) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("save memory"))
     await bridge.handle_app_server_request(
         AppServerEvent(
@@ -3853,7 +3853,7 @@ async def test_mcp_elicitation_decline_and_cancel_callbacks_send_response(tmp_pa
 async def test_mcp_elicitation_callback_rejects_other_user_and_expired_token(tmp_path: Path) -> None:
     now = datetime(2026, 5, 24, tzinfo=timezone.utc)
     bridge, bot, app_server, store, access = bridge_for(tmp_path, now=now)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("save memory"))
     await bridge.handle_app_server_request(
         AppServerEvent(
@@ -3889,7 +3889,7 @@ async def test_mcp_elicitation_callback_rejects_other_user_and_expired_token(tmp
 @pytest.mark.asyncio
 async def test_tool_user_input_option_callback_sends_answer_and_resumes_typing(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for_typing(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("ask me"))
     await asyncio.sleep(0)
     await bridge.handle_app_server_request(
@@ -3936,7 +3936,7 @@ async def test_tool_user_input_option_callback_sends_answer_and_resumes_typing(t
 @pytest.mark.asyncio
 async def test_tool_user_input_free_form_answer_uses_next_text_message(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("ask me"))
     await bridge.handle_app_server_request(
         AppServerEvent(
@@ -3966,7 +3966,7 @@ async def test_tool_user_input_free_form_answer_uses_next_text_message(tmp_path:
 @pytest.mark.asyncio
 async def test_tool_user_input_other_button_waits_for_text_answer(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("ask me"))
     await bridge.handle_app_server_request(
         AppServerEvent(
@@ -4002,7 +4002,7 @@ async def test_tool_user_input_other_button_waits_for_text_answer(tmp_path: Path
 @pytest.mark.asyncio
 async def test_tool_user_input_cancel_sends_error(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("ask me"))
     await bridge.handle_app_server_request(
         AppServerEvent(
@@ -4028,7 +4028,7 @@ async def test_tool_user_input_cancel_sends_error(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_tool_user_input_rejects_secret_questions(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("ask me"))
 
     await bridge.handle_app_server_request(
@@ -4056,7 +4056,7 @@ async def test_tool_user_input_rejects_secret_questions(tmp_path: Path) -> None:
 async def test_tool_user_input_callback_rejects_wrong_user_and_expires(tmp_path: Path) -> None:
     now = datetime(2026, 5, 24, tzinfo=timezone.utc)
     bridge, bot, app_server, store, access = bridge_for(tmp_path, now=now)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("ask me"))
     await bridge.handle_app_server_request(
         AppServerEvent(
@@ -4100,7 +4100,7 @@ async def test_tool_user_input_callback_rejects_wrong_user_and_expires(tmp_path:
 @pytest.mark.asyncio
 async def test_fork_uses_app_server_fork_when_current_thread_exists(tmp_path: Path) -> None:
     bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
     await complete_active_turn(bridge)
 
@@ -4119,7 +4119,7 @@ async def test_fork_uses_app_server_fork_when_current_thread_exists(tmp_path: Pa
 @pytest.mark.asyncio
 async def test_inline_side_turn_does_not_replace_active_thread_mapping(tmp_path: Path) -> None:
     bridge, bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("/new"))
 
     await bridge.handle_update(message_update("/side check this", message_id=11))
@@ -4159,7 +4159,7 @@ async def test_inline_side_turn_does_not_replace_active_thread_mapping(tmp_path:
 @pytest.mark.asyncio
 async def test_archive_and_unarchive_use_app_server_thread_methods(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
     await complete_active_turn(bridge)
 
@@ -4185,7 +4185,7 @@ async def test_archive_and_unarchive_use_app_server_thread_methods(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_thread_command_json_rpc_errors_are_reported_without_crashing(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
     await complete_active_turn(bridge)
 
@@ -4202,7 +4202,7 @@ async def test_thread_command_json_rpc_errors_are_reported_without_crashing(tmp_
 @pytest.mark.asyncio
 async def test_compact_uses_app_server_compact_when_thread_exists(tmp_path: Path) -> None:
     bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
     await complete_active_turn(bridge)
 
@@ -4214,7 +4214,7 @@ async def test_compact_uses_app_server_compact_when_thread_exists(tmp_path: Path
 @pytest.mark.asyncio
 async def test_codex_turn_command_json_rpc_errors_are_reported_without_crashing(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
     await complete_active_turn(bridge)
 
@@ -4231,7 +4231,7 @@ async def test_codex_turn_command_json_rpc_errors_are_reported_without_crashing(
 @pytest.mark.asyncio
 async def test_review_uses_app_server_review_start_when_thread_exists(tmp_path: Path) -> None:
     bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
     await complete_active_turn(bridge)
 
@@ -4244,7 +4244,7 @@ async def test_review_uses_app_server_review_start_when_thread_exists(tmp_path: 
 @pytest.mark.asyncio
 async def test_review_creates_thread_and_uses_app_server_review_start_without_existing_thread(tmp_path: Path) -> None:
     bridge, _bot, app_server, store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("/review"))
 
@@ -4259,7 +4259,7 @@ async def test_review_creates_thread_and_uses_app_server_review_start_without_ex
 async def test_approval_callback_rejects_other_user_and_expired_token(tmp_path: Path) -> None:
     now = datetime(2026, 5, 24, tzinfo=timezone.utc)
     bridge, bot, app_server, store, access = bridge_for(tmp_path, now=now)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("run tests"))
     await bridge.handle_app_server_request(
         AppServerEvent(
@@ -4286,7 +4286,7 @@ async def test_approval_callback_rejects_other_user_and_expired_token(tmp_path: 
 @pytest.mark.asyncio
 async def test_telegram_reply_tool_suppresses_final_auto_reply(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
 
     await bridge.handle_app_server_request(
@@ -4308,7 +4308,7 @@ async def test_telegram_reply_tool_suppresses_final_auto_reply(tmp_path: Path) -
 @pytest.mark.asyncio
 async def test_telegram_reply_tool_sends_valid_message_options(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
 
     await bridge.handle_app_server_request(
@@ -4340,7 +4340,7 @@ async def test_telegram_reply_tool_sends_valid_message_options(tmp_path: Path) -
 @pytest.mark.asyncio
 async def test_telegram_react_and_edit_tools_are_scoped(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("hi"))
 
     sent = await bot.send_message(42, "owned")
@@ -4375,7 +4375,7 @@ async def test_telegram_react_and_edit_tools_are_scoped(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_download_attachment_tool_is_limited_to_current_turn_files(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     bot.files["file_1"] = {"file_path": "docs/note.txt", "file_size": 4}
     bot.downloads["docs/note.txt"] = b"note"
     update = message_update("summarize")
@@ -4404,7 +4404,7 @@ async def test_download_attachment_tool_is_limited_to_current_turn_files(tmp_pat
 @pytest.mark.asyncio
 async def test_send_document_tool_sends_workspace_file_to_telegram(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     output = bridge.settings.default_cwd / "report.xlsx"
     output.write_bytes(b"xlsx bytes")
     await bridge.handle_update(message_update("make a report"))
@@ -4440,7 +4440,7 @@ async def test_send_document_tool_sends_workspace_file_to_telegram(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_media_tools_send_workspace_files_to_native_telegram_methods(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     photo = bridge.settings.default_cwd / "photo.png"
     video = bridge.settings.default_cwd / "clip.mp4"
     photo.write_bytes(b"png bytes")
@@ -4553,7 +4553,7 @@ async def test_additional_media_tools_send_workspace_files_to_native_methods(
     expected: dict[str, Any],
 ) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     path = bridge.settings.default_cwd / filename
     path.write_bytes(data)
     await bridge.handle_update(message_update("send media"))
@@ -4577,7 +4577,7 @@ async def test_additional_media_tools_send_workspace_files_to_native_methods(
 @pytest.mark.asyncio
 async def test_live_photo_media_group_and_paid_media_tools_send_native_payloads(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     for name, data in {
         "live.mp4": b"live video",
         "still.jpg": b"still",
@@ -4658,7 +4658,7 @@ async def test_media_tools_reject_missing_outside_and_oversized_paths(
     collection_name: str,
 ) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     object.__setattr__(bridge.settings, "max_attachment_bytes", 3)
     outside = tmp_path / filename
     outside.write_bytes(b"ok")
@@ -4692,7 +4692,7 @@ async def test_media_tools_reject_missing_outside_and_oversized_paths(
 @pytest.mark.asyncio
 async def test_send_document_tool_rejects_files_outside_active_workspace(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     outside = tmp_path / "secret.txt"
     outside.write_text("secret", encoding="utf-8")
     await bridge.handle_update(message_update("send this"))
@@ -4712,7 +4712,7 @@ async def test_send_document_tool_rejects_files_outside_active_workspace(tmp_pat
 @pytest.mark.asyncio
 async def test_send_file_tools_allow_current_turn_downloaded_attachment_paths(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     bot.files["file_1"] = {"file_path": "docs/note.txt", "file_size": 4}
     bot.downloads["docs/note.txt"] = b"note"
     update = message_update("send it back")
@@ -4738,7 +4738,7 @@ async def test_send_file_tools_allow_current_turn_downloaded_attachment_paths(tm
 @pytest.mark.asyncio
 async def test_structured_send_tools_route_to_native_bot_methods(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("send structured payloads"))
 
     calls = [
@@ -4773,7 +4773,7 @@ async def test_structured_send_tools_route_to_native_bot_methods(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_copy_and_forward_tools_are_scoped_to_current_inbound_message(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     await bridge.handle_update(message_update("copy this", message_id=44))
 
     await bridge.handle_app_server_request(
@@ -4803,7 +4803,7 @@ async def test_copy_and_forward_tools_are_scoped_to_current_inbound_message(tmp_
 @pytest.mark.asyncio
 async def test_telegram_api_tool_errors_are_returned_as_tool_results(tmp_path: Path) -> None:
     bridge, bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
     paid = bridge.settings.default_cwd / "paid.mp4"
     paid.write_bytes(b"paid")
     await bridge.handle_update(message_update("send paid"))
@@ -4831,7 +4831,7 @@ async def test_telegram_api_tool_errors_are_returned_as_tool_results(tmp_path: P
 @pytest.mark.asyncio
 async def test_skill_marker_adds_skill_input_when_app_server_lookup_finds_path(tmp_path: Path) -> None:
     bridge, _bot, app_server, _store, access = bridge_for(tmp_path)
-    access.allow_user("123", username="xtian", source="cli")
+    access.allow_user("123", username="gatewayuser", source="cli")
 
     await bridge.handle_update(message_update("$skill-creator Add triage steps"))
 
@@ -4839,7 +4839,7 @@ async def test_skill_marker_adds_skill_input_when_app_server_lookup_finds_path(t
     assert app_server.turn_starts[0]["input_items"][1] == {
         "type": "skill",
         "name": "skill-creator",
-        "path": r"C:\Users\xtian\.codex\skills\skill-creator\SKILL.md",
+        "path": r"C:\Users\gatewayuser\.codex\skills\skill-creator\SKILL.md",
     }
 
 

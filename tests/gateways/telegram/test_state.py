@@ -22,7 +22,7 @@ def test_state_store_creates_root_and_empty_default_objects(tmp_path: Path) -> N
 
 def test_state_store_atomic_write_read_round_trip(tmp_path: Path) -> None:
     store = TelegramStateStore(tmp_path)
-    data = {"allowed_users": {"123": {"username": "xtian"}}, "pairing_codes": {}}
+    data = {"allowed_users": {"123": {"username": "gatewayuser"}}, "pairing_codes": {}}
 
     store.save_access(data)
 

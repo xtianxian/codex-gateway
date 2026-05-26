@@ -56,7 +56,7 @@ def test_telegram_status_prints_sanitized_summary(monkeypatch, tmp_path: Path, c
 def test_telegram_access_pair_allow_remove(monkeypatch, tmp_path: Path, capsys) -> None:
     configure_env(monkeypatch, tmp_path)
     settings = get_telegram_settings()
-    code = AccessManager(TelegramStateStore(settings.state_dir)).create_pairing_code("123", username="xtian")
+    code = AccessManager(TelegramStateStore(settings.state_dir)).create_pairing_code("123", username="gatewayuser")
 
     cli.main(["telegram", "access", "pair", code])
     pair_output = json.loads(capsys.readouterr().out)
@@ -86,7 +86,7 @@ def test_telegram_access_pair_notifies_telegram_when_code_has_chat_id(monkeypatc
     settings = get_telegram_settings()
     code = AccessManager(TelegramStateStore(settings.state_dir)).create_pairing_code(
         "123",
-        username="xtian",
+        username="gatewayuser",
         chat_id=42,
     )
 

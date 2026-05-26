@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 *.md
+!docs/
+!docs/*.md
 !/README.md
 .codex-gateway/
 workspace/
