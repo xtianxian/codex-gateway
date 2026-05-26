@@ -13,6 +13,7 @@ from codex_gateway.backends.codex_app_server.protocol import generated_server_re
 from codex_gateway.core.commands import default_command_registry
 from codex_gateway.gateways.telegram.access import AccessManager
 from codex_gateway.gateways.telegram.bridge import (
+    PLAN_CHOICE_TEXT,
     TELEGRAM_SERVER_REQUEST_SUPPORT,
     TELEGRAM_GATEWAY_DEVELOPER_INSTRUCTIONS,
     TelegramBridge,
@@ -2643,6 +2644,212 @@ async def test_event_rendering_uses_documented_agent_message_events(tmp_path: Pa
     )
 
     assert [message["text"] for message in bot.messages] == ["OK"]
+
+
+@pytest.mark.asyncio
+async def test_plan_updated_event_is_rendered_and_updated_in_telegram(tmp_path: Path) -> None:
+    bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    await bridge.handle_update(message_update("/plan inspect"))
+    context = bridge._active_turn_context("42")
+    assert context is not None
+
+    await bridge.handle_app_event(
+        AppServerEvent(
+            "turn/plan/updated",
+            {
+                "threadId": context.thread_id,
+                "turnId": context.turn_id,
+                "explanation": "Use focused steps.",
+                "plan": [
+                    {"status": "completed", "step": "Inspect the /plan event path"},
+                    {"status": "inProgress", "step": "Render plan updates in Telegram"},
+                    {"status": "pending", "step": "Run focused tests"},
+                ],
+            },
+        )
+    )
+
+    first_plan_message = bot.messages[-1]
+    assert first_plan_message["text"] == (
+        "Plan:\n"
+        "Use focused steps.\n"
+        "- [x] Inspect the /plan event path\n"
+        "- [~] Render plan updates in Telegram\n"
+        "- [ ] Run focused tests"
+    )
+
+    await bridge.handle_app_event(
+        AppServerEvent(
+            "turn/plan/updated",
+            {
+                "threadId": context.thread_id,
+                "turnId": context.turn_id,
+                "explanation": "Use focused steps.",
+                "plan": [
+                    {"status": "completed", "step": "Inspect the /plan event path"},
+                    {"status": "completed", "step": "Render plan updates in Telegram"},
+                    {"status": "inProgress", "step": "Run focused tests"},
+                ],
+            },
+        )
+    )
+
+    assert len([message for message in bot.messages if message["text"].startswith("Plan:")]) == 1
+    assert bot.edits[-1]["message_id"] == first_plan_message["message_id"]
+    assert bot.edits[-1]["text"] == (
+        "Plan:\n"
+        "Use focused steps.\n"
+        "- [x] Inspect the /plan event path\n"
+        "- [x] Render plan updates in Telegram\n"
+        "- [~] Run focused tests"
+    )
+
+
+@pytest.mark.asyncio
+async def test_completed_plan_item_is_rendered_to_telegram(tmp_path: Path) -> None:
+    bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    await bridge.handle_update(message_update("make a plan"))
+    context = bridge._active_turn_context("42")
+    assert context is not None
+
+    await bridge.handle_app_event(
+        AppServerEvent(
+            "item/completed",
+            {
+                "threadId": context.thread_id,
+                "turnId": context.turn_id,
+                "item": {"id": "plan_1", "type": "plan", "text": "1. Inspect\n2. Verify"},
+            },
+        )
+    )
+
+    assert bot.messages[-1]["text"] == "Plan:\n1. Inspect\n2. Verify"
+
+
+@pytest.mark.asyncio
+async def test_completed_plan_prompts_for_cli_style_implementation_choice(tmp_path: Path) -> None:
+    bridge, bot, app_server, store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    await bridge.handle_update(message_update("/plan inspect"))
+    context = bridge._active_turn_context("42")
+    assert context is not None
+    await bridge.handle_app_event(
+        AppServerEvent(
+            "turn/plan/updated",
+            {
+                "threadId": context.thread_id,
+                "turnId": context.turn_id,
+                "plan": [{"status": "pending", "step": "Render plan choices in Telegram"}],
+            },
+        )
+    )
+
+    await complete_active_turn(bridge)
+
+    assert bot.messages[-1]["text"] == PLAN_CHOICE_TEXT
+    buttons = inline_button_map(bot.messages[-1])
+    assert list(buttons) == [
+        "Yes, implement this plan",
+        "Yes, clear context and implement",
+        "No, stay in Plan mode",
+    ]
+
+    pending = store.load_pending_selections()
+    assert {record["action"] for record in pending.values()} == {
+        "plan_implement",
+        "plan_fresh",
+        "plan_stay",
+    }
+
+    await bridge.handle_update(
+        callback_update(buttons["Yes, implement this plan"], message_id=bot.messages[-1]["message_id"])
+    )
+
+    assert_callback_keyboard_cleared(bot.edits[-1])
+    assert bot.edits[-1]["text"] == "Implementing this plan in Default mode."
+    assert store.load_pending_selections() == {}
+    assert app_server.thread_settings_updates[-1]["collaboration_mode"]["mode"] == "default"
+    assert len(app_server.turn_starts) == 2
+    assert app_server.turn_starts[-1]["thread_id"] == "thr_1"
+    prompt = app_server.turn_starts[-1]["input_items"][0]["text"]
+    assert prompt.startswith("Implement this plan now.")
+    assert "Render plan choices in Telegram" in prompt
+    await complete_active_turn(bridge)
+    await drain_background_tasks(bridge)
+
+
+@pytest.mark.asyncio
+async def test_plan_turn_suppresses_buffered_progress_message_after_plan(tmp_path: Path) -> None:
+    bridge, bot, _app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    await bridge.handle_update(message_update("/plan inspect"))
+    context = bridge._active_turn_context("42")
+    assert context is not None
+    await bridge.handle_app_event(
+        AppServerEvent(
+            "turn/plan/updated",
+            {
+                "threadId": context.thread_id,
+                "turnId": context.turn_id,
+                "plan": [{"status": "pending", "step": "Inspect the existing page"}],
+            },
+        )
+    )
+    await bridge.handle_app_event(
+        AppServerEvent(
+            "item/completed",
+            {
+                "threadId": context.thread_id,
+                "turnId": context.turn_id,
+                "item": {"id": "item_1", "type": "agentMessage", "text": "I am reading index.html before planning."},
+            },
+        )
+    )
+
+    await complete_active_turn(bridge)
+
+    assert bot.messages[-1]["text"] == PLAN_CHOICE_TEXT
+    assert "Inspect the existing page" in bot.messages[-2]["text"]
+    assert all("reading index.html" not in message["text"] for message in bot.messages)
+
+
+@pytest.mark.asyncio
+async def test_clear_context_plan_choice_starts_fresh_default_thread(tmp_path: Path) -> None:
+    bridge, bot, app_server, store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="xtian", source="cli")
+    await bridge.handle_update(message_update("/plan inspect"))
+    context = bridge._active_turn_context("42")
+    assert context is not None
+    await bridge.handle_app_event(
+        AppServerEvent(
+            "turn/plan/updated",
+            {
+                "threadId": context.thread_id,
+                "turnId": context.turn_id,
+                "plan": [{"status": "pending", "step": "Create the static page"}],
+            },
+        )
+    )
+    await complete_active_turn(bridge)
+    buttons = inline_button_map(bot.messages[-1])
+
+    await bridge.handle_update(
+        callback_update(buttons["Yes, clear context and implement"], message_id=bot.messages[-1]["message_id"])
+    )
+
+    assert bot.edits[-1]["text"] == "Starting a fresh Default-mode thread to implement this plan."
+    assert len(app_server.thread_starts) == 2
+    assert app_server.turn_starts[-1]["thread_id"] == "thr_2"
+    prompt = app_server.turn_starts[-1]["input_items"][0]["text"]
+    assert prompt.startswith("A previous agent produced the plan below")
+    assert "Create the static page" in prompt
+    record = store.load_threads()[TelegramStateStore.thread_key(42, bridge.settings.default_cwd)]
+    assert record["thread_id"] == "thr_2"
+    assert record["settings"]["active_mode"] == "default"
+    await complete_active_turn(bridge)
+    await drain_background_tasks(bridge)
 
 
 @pytest.mark.asyncio

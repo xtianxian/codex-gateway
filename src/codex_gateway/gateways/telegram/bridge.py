@@ -28,6 +28,8 @@ from .bridge_helpers import (
     sanitize_text,
     _input_items,
     _assistant_text,
+    _format_turn_plan,
+    _plan_item_text,
     _output_attachment,
     _output_attachment_caption,
     _decode_image_result,
@@ -185,6 +187,29 @@ from .types import OutputAttachment, TurnContext
 
 
 LOGGER = logging.getLogger(__name__)
+PLAN_CHOICE_TEXT = (
+    "Implement this plan?\n\n"
+    "1. Yes, implement this plan\n"
+    "2. Yes, clear context and implement\n"
+    "3. No, stay in Plan mode"
+)
+
+
+def _plan_implementation_prompt(plan_text: str) -> str:
+    return (
+        "Implement this plan now. Re-read files as needed, and carry the work through "
+        "implementation and verification.\n\n"
+        f"{plan_text}"
+    )
+
+
+def _fresh_plan_implementation_prompt(plan_text: str) -> str:
+    return (
+        "A previous agent produced the plan below to accomplish the user's task. "
+        "Implement the plan in a fresh context. Treat the plan as the source of user intent, "
+        "re-read files as needed, and carry the work through implementation and verification.\n\n"
+        f"{plan_text}"
+    )
 
 
 class TelegramBridge(
@@ -347,9 +372,18 @@ class TelegramBridge(
             return
         if event.method == "item/started":
             return
+        if event.method == "turn/plan/updated":
+            text = _format_turn_plan(event.params)
+            if text:
+                await self._send_or_update_plan(context, text)
+            return
         if event.method == "item/completed":
             item = _item(event.params)
             await self._send_output_attachment(context, item)
+            plan_text = _plan_item_text(item)
+            if plan_text:
+                await self._send_or_update_plan(context, plan_text)
+                return
             text = _assistant_text(item)
             if text:
                 context.final_text = text
@@ -377,9 +411,170 @@ class TelegramBridge(
                 if isinstance(item, dict):
                     await self._send_output_attachment(context, item)
             self._schedule_auto_name_thread(context)
-            if context.final_text and not context.tool_replied and not context.auto_replied:
+            if (
+                context.final_text
+                and not context.plan_text
+                and not context.tool_replied
+                and not context.auto_replied
+            ):
                 await self._send(context.chat_id, context.final_text)
                 context.auto_replied = True
+            if context.plan_text:
+                await self._send_or_update_plan_choices(context)
+
+    async def _send_or_update_plan(self, context: TurnContext, text: str) -> None:
+        text = text.strip()
+        if not text or text == context.plan_text:
+            return
+        context.plan_text = text
+        sanitized = sanitize_text(text)
+        if context.plan_message_id is not None and hasattr(self.bot, "edit_message_text") and len(sanitized) <= 3500:
+            try:
+                await self.bot.edit_message_text(
+                    _bot_chat_id(context.chat_id),
+                    context.plan_message_id,
+                    sanitized,
+                )
+                return
+            except Exception as exc:
+                LOGGER.debug("Failed to edit Telegram plan message: %s", exc)
+                context.plan_message_id = None
+        sent = await self._send(context.chat_id, text)
+        if len(sent) != 1 or len(sanitized) > 3500:
+            return
+        message_id = sent[0].get("message_id")
+        if message_id is not None:
+            context.plan_message_id = int(message_id)
+
+    async def _send_or_update_plan_choices(self, context: TurnContext) -> None:
+        keyboard = self._plan_choice_keyboard(context)
+        if context.plan_choice_message_id is not None and hasattr(self.bot, "edit_message_text"):
+            try:
+                await self.bot.edit_message_text(
+                    _bot_chat_id(context.chat_id),
+                    context.plan_choice_message_id,
+                    PLAN_CHOICE_TEXT,
+                    reply_markup={"inline_keyboard": keyboard},
+                )
+                self._save_plan_choice_message_id(context)
+                return
+            except Exception as exc:
+                LOGGER.debug("Failed to edit Telegram plan choice message: %s", exc)
+                context.plan_choice_message_id = None
+        sent = await self._send(context.chat_id, PLAN_CHOICE_TEXT, reply_markup={"inline_keyboard": keyboard})
+        if sent:
+            message_id = sent[0].get("message_id")
+            if message_id is not None:
+                context.plan_choice_message_id = int(message_id)
+                self._save_plan_choice_message_id(context)
+
+    def _plan_choice_keyboard(self, context: TurnContext) -> list[list[dict[str, str]]]:
+        pending = self.store.load_pending_selections()
+        if context.plan_selection_group_id:
+            for token, record in list(pending.items()):
+                if isinstance(record, dict) and record.get("group_id") == context.plan_selection_group_id:
+                    pending.pop(token, None)
+        group_id = secrets.token_urlsafe(8)
+        context.plan_selection_group_id = group_id
+        expires_at = _format_iso(self.access.now_fn() + timedelta(seconds=self.settings.approval_timeout_seconds))
+        value = {
+            "thread_id": context.thread_id,
+            "turn_id": context.turn_id,
+            "plan_text": context.plan_text,
+        }
+        rows: list[list[dict[str, str]]] = []
+        for label, action in (
+            ("Yes, implement this plan", "plan_implement"),
+            ("Yes, clear context and implement", "plan_fresh"),
+            ("No, stay in Plan mode", "plan_stay"),
+        ):
+            token = secrets.token_urlsafe(8)
+            pending[token] = {
+                "chat_id": str(context.chat_id),
+                "user_id": str(context.user_id),
+                "action": action,
+                "value": value,
+                "group_id": group_id,
+                "expires_at": expires_at,
+            }
+            rows.append([{"text": label, "callback_data": f"select:{token}"}])
+        self.store.save_pending_selections(pending)
+        return rows
+
+    def _save_plan_choice_message_id(self, context: TurnContext) -> None:
+        if context.plan_choice_message_id is None or not context.plan_selection_group_id:
+            return
+        pending = self.store.load_pending_selections()
+        changed = False
+        for record in pending.values():
+            if isinstance(record, dict) and record.get("group_id") == context.plan_selection_group_id:
+                record["message_id"] = context.plan_choice_message_id
+                changed = True
+        if changed:
+            self.store.save_pending_selections(pending)
+
+    async def _apply_plan_choice(
+        self,
+        chat_id: str,
+        user_id: str,
+        workspace: Path,
+        action: str,
+        value: dict[str, Any],
+    ) -> str:
+        plan_text = _first_text(value.get("plan_text"))
+        if not plan_text:
+            return "Plan is no longer available."
+        if action == "plan_stay":
+            return "Staying in Plan mode. Send feedback or a revised request."
+        if self._active_turn_context(chat_id) is not None:
+            return "The planning turn is still running. Wait for it to finish, then choose again."
+        if action == "plan_implement":
+            mode_error = await self._switch_to_default_mode(chat_id, workspace)
+            if mode_error:
+                return mode_error
+            await self._start_turn(
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=None,
+                text=_plan_implementation_prompt(plan_text),
+                attachments=[],
+            )
+            return "Implementing this plan in Default mode."
+        if action == "plan_fresh":
+            self._save_thread_active_mode(chat_id, workspace, "default")
+            await self._start_turn(
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=None,
+                text=_fresh_plan_implementation_prompt(plan_text),
+                attachments=[],
+                force_new_thread=True,
+            )
+            return "Starting a fresh Default-mode thread to implement this plan."
+        return "Plan choice is no longer available."
+
+    async def _switch_to_default_mode(self, chat_id: str, workspace: Path) -> str | None:
+        payload = await self._collaboration_mode_payload_for_mode(chat_id, workspace, "default")
+        if payload is None:
+            model = self._thread_mode_setting(chat_id, workspace, "model", mode_name="default")
+            if model is None:
+                model = await self._default_model_setting()
+            if model is None:
+                return "Collaboration mode cannot be applied: default"
+            payload = {
+                "mode": "default",
+                "settings": {
+                    "developer_instructions": None,
+                    "model": model,
+                    "reasoning_effort": self._thread_mode_setting(chat_id, workspace, "effort", mode_name="default"),
+                },
+            }
+        existing_thread_id = str(self._thread_record(chat_id, workspace).get("thread_id") or "")
+        self._save_thread_active_mode(chat_id, workspace, "default")
+        thread_id = await self._ensure_thread(chat_id, workspace, active_mode_payload=payload)
+        if existing_thread_id and existing_thread_id == thread_id:
+            await self.app_server.thread_settings_update(thread_id=thread_id, collaboration_mode=payload)
+        return None
 
     async def handle_app_server_request(self, event: AppServerEvent) -> None:
         LOGGER.debug(

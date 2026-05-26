@@ -684,6 +684,8 @@ class TelegramBridgeRequestMixin:
             return await self._apply_personality_setting(chat_id, workspace, value)
         if action == "memory" and isinstance(value, str):
             return await self._apply_memory_mode_setting(chat_id, workspace, value)
+        if action in {"plan_implement", "plan_fresh", "plan_stay"} and isinstance(value, dict):
+            return await self._apply_plan_choice(chat_id, user_id, workspace, action, value)
         if action == "experimental" and isinstance(value, dict):
             name = str(value.get("name") or "")
             enabled = bool(value.get("enabled"))

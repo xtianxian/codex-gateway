@@ -244,6 +244,7 @@ uv run codex-gateway telegram setup --permission-profile full-access
 | `/new`, `/resume`, `/threads` | Manage Codex threads. |
 | `/reset`, `/clear` | Reset chat state or clear local thread mappings. `/clear` preserves the active workspace and preferences. |
 | `/model`, `/permissions`, `/mode`, `/personality` | Change persisted thread settings with inline selectors where available; model and effort are mode-scoped. |
+| `/plan [text]` | Switch to Plan mode, show plan updates in Telegram, then offer CLI-style implement, fresh-thread implement, or stay-in-plan choices. |
 | `/diff`, `/review`, `/compact`, `/mention <path>` | Run common Codex workflows. |
 | `/steer <text>`, `/cancel` | Control an active turn. |
 | `/plugins`, `/skills`, `/mcp`, `/features`, `/config`, `/debug-config` | Inspect local Codex app-server capabilities. |

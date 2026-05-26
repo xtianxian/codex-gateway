@@ -76,6 +76,51 @@ def _assistant_text(item: dict[str, Any]) -> str:
     return ""
 
 
+def _format_turn_plan(params: dict[str, Any]) -> str | None:
+    explanation = _first_text(params.get("explanation"))
+    step_lines: list[str] = []
+    plan = params.get("plan")
+    if isinstance(plan, list):
+        for item in plan:
+            if not isinstance(item, dict):
+                continue
+            step = _first_text(item.get("step"))
+            if step is None:
+                continue
+            marker = _plan_status_marker(item.get("status"))
+            step_lines.append(f"- {marker} {step}")
+    if not explanation and not step_lines:
+        return None
+    lines = ["Plan:"]
+    if explanation:
+        lines.append(explanation)
+    lines.extend(step_lines)
+    return "\n".join(lines)
+
+
+def _plan_item_text(item: dict[str, Any]) -> str | None:
+    item_type = str(item.get("type") or "")
+    if item_type != "plan":
+        return None
+    text = _first_text(item.get("text"))
+    if text is None:
+        return None
+    if text.lower().startswith("plan"):
+        return text
+    return f"Plan:\n{text}"
+
+
+def _plan_status_marker(value: Any) -> str:
+    status = str(value or "").replace("-", "").replace("_", "").lower()
+    if status == "completed":
+        return "[x]"
+    if status == "inprogress":
+        return "[~]"
+    if status == "pending":
+        return "[ ]"
+    return "[ ]"
+
+
 def _output_attachment(item: dict[str, Any]) -> OutputAttachment | None:
     item_type = str(item.get("type") or "")
     if item_type not in {"imageGeneration", "image_generation_call", "image_generation_end"}:

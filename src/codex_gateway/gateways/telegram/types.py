@@ -17,6 +17,10 @@ class TurnContext:
     tool_replied: bool = False
     auto_replied: bool = False
     completed: bool = False
+    plan_text: str = ""
+    plan_message_id: int | None = None
+    plan_choice_message_id: int | None = None
+    plan_selection_group_id: str | None = None
     attachments: dict[str, dict[str, Any]] = field(default_factory=dict)
     output_attachments_sent: set[str] = field(default_factory=set)
 
