@@ -18,6 +18,8 @@
   &middot;
   <a href="#configuration">Configuration</a>
   &middot;
+  <a href="#troubleshooting">Troubleshooting</a>
+  &middot;
   <a href="#copy-paste-commands">Copy-Paste Commands</a>
   &middot;
   <a href="#roadmap">Roadmap</a>
@@ -108,6 +110,29 @@ This alpha targets the Codex app-server protocol schema generated with
 The gateway talks to local Codex app-server over loopback WebSocket by default.
 If Codex app-server changes its generated schema, regenerate the checked-in
 protocol files and rerun the test suite before tagging a new snapshot.
+
+Regenerate the protocol bundle after upgrading Codex CLI when app-server request
+or response shapes may have changed:
+
+```powershell
+codex app-server generate-json-schema --out src\codex_gateway\backends\codex_app_server\protocol --experimental
+uv run pytest -p no:cacheprovider tests\backends\codex_app_server tests\gateways\telegram\test_bridge.py tests\gateways\telegram\test_command_menu.py
+uv run pytest
+```
+
+Keep this README compatibility target and any annotated tag message aligned with
+the Codex CLI version used to generate the checked-in schema.
+
+## Release And Tagging
+
+Use ordinary commits for regular development. Use annotated Git tags only for
+public snapshots that someone may want to install, compare, or return to later.
+
+The current public snapshot is `v0.1.0-alpha.1`. Alpha tags should use the
+format `v0.1.0-alpha.N` while the project is still moving toward a first
+`v0.1.0` release. Compatibility notes belong in this README and in the
+annotated tag message. GitHub Releases and package publishing are not required
+unless the project intentionally adds a package release workflow.
 
 ## Quick Start
 
@@ -345,6 +370,85 @@ Remove the service:
 
 ```powershell
 .\scripts\setup.ps1 -RemoveStartup
+```
+
+## Troubleshooting
+
+### Missing Bot Token
+
+If `telegram run` reports that `CODEX_GATEWAY_TELEGRAM_BOT_TOKEN` is required,
+rerun setup or check the sanitized status output:
+
+```powershell
+uv run codex-gateway telegram setup
+uv run codex-gateway telegram status
+```
+
+### Pairing Or Unauthorized User
+
+Only the configured Telegram user can request a pairing code. Send `/start` to
+the bot from that account, then run the local command the bot replies with:
+
+```powershell
+uv run codex-gateway telegram access status
+uv run codex-gateway telegram access pair <code>
+```
+
+### Codex Authentication
+
+The gateway uses your local Codex CLI/app-server session, not
+`OPENAI_API_KEY`. Confirm Codex CLI is installed and authenticated before
+starting the gateway:
+
+```powershell
+codex --version
+uv run codex-gateway telegram status
+```
+
+### Workspace Rejected
+
+The active workspace must be inside `CODEX_GATEWAY_ALLOWED_ROOTS`. Inspect the
+current workspace state, then rerun setup if the configured roots need to
+change:
+
+```powershell
+uv run codex-gateway telegram workspace list
+uv run codex-gateway telegram setup
+```
+
+### App-Server Readiness Timeout
+
+Default startup uses a loopback WebSocket app-server. If readiness times out,
+check whether another process owns the configured port and then restart the
+gateway or service:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8765 -State Listen |
+  Select-Object LocalAddress,LocalPort,OwningProcess
+Restart-Service CodexGateway
+```
+
+### Logs
+
+Foreground runs write logs to the current terminal. The Windows Service writes
+logs under `.codex-gateway\logs\service`:
+
+```powershell
+Get-ChildItem .codex-gateway\logs\service |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 5
+Get-Content .codex-gateway\logs\service\*.log -Tail 80
+```
+
+### Telegram API Connectivity
+
+If command-menu sync or polling reports connection failures, verify basic
+network access to Telegram and then restart the gateway:
+
+```powershell
+Invoke-WebRequest https://api.telegram.org -UseBasicParsing |
+  Select-Object StatusCode
+Restart-Service CodexGateway
 ```
 
 ## Development
