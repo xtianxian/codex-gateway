@@ -671,13 +671,24 @@ def _message_id(message: dict[str, Any]) -> int | None:
     return int(value) if isinstance(value, int) else None
 
 
-def _pairing_guidance_text(code: str) -> str:
+DEFAULT_PAIR_COMMAND_TEMPLATE = "uv run codex-gateway telegram access pair {code}"
+
+
+def _pairing_guidance_text(code: str, command_template: str | None = None) -> str:
+    command = _pairing_command(code, command_template)
     return (
         "This Telegram user is not paired.\n\n"
         "Run this in your project terminal:\n"
-        f"uv run codex-gateway telegram access pair {code}\n\n"
+        f"{command}\n\n"
         "Then send another message here."
     )
+
+
+def _pairing_command(code: str, command_template: str | None = None) -> str:
+    template = (command_template or DEFAULT_PAIR_COMMAND_TEMPLATE).strip()
+    if "{code}" in template:
+        return template.replace("{code}", code)
+    return f"{template} {code}".strip()
 
 
 def _start_pairing_text() -> str:

@@ -1,0 +1,93 @@
+name: codex-gateway-linux
+
+x-codex-gateway-env: &codex-gateway-env
+  CODEX_HOME: /codex-home
+  UV_PROJECT_ENVIRONMENT: /repo/.venv
+  UV_LINK_MODE: copy
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+  CODEX_GATEWAY_ALLOWED_ROOTS: /work/workspace
+  CODEX_GATEWAY_DEFAULT_CWD: /work/workspace
+  CODEX_GATEWAY_TELEGRAM_STATE_DIR: /work/.codex-gateway/telegram
+  CODEX_GATEWAY_CODEX_BIN: codex
+  CODEX_GATEWAY_APP_SERVER_URL: ws://127.0.0.1:8765
+  CODEX_GATEWAY_APP_SERVER_TRANSPORT: websocket
+  CODEX_GATEWAY_TELEGRAM_PAIR_COMMAND: 'docker compose -f testing\docker\compose.linux.yaml run --rm codex-gateway-cli pair {code}'
+
+x-codex-gateway-common: &codex-gateway-common
+  build:
+    context: ../..
+    dockerfile: testing/docker/Dockerfile.linux
+    args:
+      CODEX_CLI_VERSION: "0.133.0"
+  image: codex-gateway-linux:0.133.0
+  working_dir: /work
+  environment:
+    <<: *codex-gateway-env
+  volumes:
+    - type: bind
+      source: ../..
+      target: /repo
+    - type: volume
+      source: linux-venv
+      target: /repo/.venv
+    - type: volume
+      source: codex-home
+      target: /codex-home
+    - type: volume
+      source: gateway-config
+      target: /config
+    - type: volume
+      source: gateway-state
+      target: /work/.codex-gateway
+    - type: volume
+      source: gateway-workspace
+      target: /work/workspace
+    - type: volume
+      source: uv-cache
+      target: /home/codex/.cache/uv
+
+services:
+  codex-gateway:
+    <<: *codex-gateway-common
+    container_name: codex-gateway
+    command: ["run"]
+
+  codex-gateway-setup:
+    <<: *codex-gateway-common
+    profiles: ["setup"]
+    environment:
+      <<: *codex-gateway-env
+      CODEX_ACCESS_TOKEN: ${CODEX_ACCESS_TOKEN:-}
+    command: ["setup"]
+    stdin_open: true
+    tty: true
+
+  codex-gateway-login:
+    <<: *codex-gateway-common
+    profiles: ["setup"]
+    environment:
+      <<: *codex-gateway-env
+      CODEX_ACCESS_TOKEN: ${CODEX_ACCESS_TOKEN:-}
+    command: ["login"]
+    stdin_open: true
+    tty: true
+
+  codex-gateway-cli:
+    <<: *codex-gateway-common
+    profiles: ["cli"]
+    command: ["status"]
+
+  codex-gateway-linux:
+    <<: *codex-gateway-common
+    container_name: codex-gateway-linux
+    profiles: ["test"]
+    command: ["sleep"]
+
+volumes:
+  linux-venv:
+  codex-home:
+  gateway-config:
+  gateway-state:
+  gateway-workspace:
+  uv-cache:

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import getpass
 import os
+import shutil
+import subprocess
+import sys
 import textwrap
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -14,12 +17,23 @@ SETUP_STATE_DIR_DEFAULT = ".codex-gateway/telegram"
 SETUP_ALLOWED_ROOT_DEFAULT = "workspace"
 SETUP_DEFAULT_CWD_DEFAULT = "workspace"
 SETUP_PERMISSION_PROFILE_DEFAULT = ":workspace"
+SETUP_MODEL_DEFAULT = "gpt-5.4-mini"
+SETUP_REASONING_EFFORT_DEFAULT = "medium"
 BOT_TOKEN_HELP = "In Telegram, open @BotFather, run /newbot, then paste the token it gives you."
 USER_ID_HELP = "In Telegram, open @userinfobot and copy your numeric ID."
 WORKSPACE_HELP = (
     "Workspace root(s) are directories Codex may use.\n"
     "Use one directory, or multiple directories separated by semicolon or comma.\n"
     "Example: C:\\codex-workspace"
+)
+MODEL_HELP = (
+    "Initial model preference is used when a new Telegram thread starts before "
+    "the chat has chosen a model with /model.\n"
+    "Enter a model name, optionally followed by reasoning effort."
+)
+CODEX_ACCESS_TOKEN_HELP_LINES = (
+    "CODEX_ACCESS_TOKEN is set; secondary token login uses `codex login --with-access-token`.",
+    "ChatGPT device auth remains the default.",
 )
 
 
@@ -31,6 +45,13 @@ class PermissionProfileChoice(NamedTuple):
     approval_policy: str
     description: str
     aliases: tuple[str, ...]
+
+
+class CodexCliStatus(NamedTuple):
+    codex_bin: str
+    resolved: str | None
+    logged_in: bool
+    status_text: str
 
 
 PERMISSION_PROFILE_CHOICES = [
@@ -81,13 +102,15 @@ GATEWAY_ENV_KEYS = {
     "CODEX_GATEWAY_CODEX_BIN": "codex",
     "CODEX_GATEWAY_APP_SERVER_URL": "ws://127.0.0.1:8765",
     "CODEX_GATEWAY_APP_SERVER_TRANSPORT": "websocket",
-    "CODEX_GATEWAY_TELEGRAM_MODEL": "",
+    "CODEX_GATEWAY_TELEGRAM_MODEL": SETUP_MODEL_DEFAULT,
+    "CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT": SETUP_REASONING_EFFORT_DEFAULT,
     "CODEX_GATEWAY_TELEGRAM_PERMISSION_PROFILE": SETUP_PERMISSION_PROFILE_DEFAULT,
     "CODEX_GATEWAY_TELEGRAM_SANDBOX": "workspace-write",
     "CODEX_GATEWAY_TELEGRAM_APPROVAL_POLICY": "on-request",
     "CODEX_GATEWAY_TELEGRAM_APPROVAL_TIMEOUT_SECONDS": "900",
     "CODEX_GATEWAY_TELEGRAM_MAX_ATTACHMENT_BYTES": "25000000",
     "CODEX_GATEWAY_TELEGRAM_POLL_TIMEOUT_SECONDS": "30",
+    "CODEX_GATEWAY_TELEGRAM_PAIR_COMMAND": "uv run codex-gateway telegram access pair {code}",
     "CODEX_GATEWAY_ENABLE_EXEC": "0",
     "CODEX_GATEWAY_ADVERTISE_EXEC": "0",
 }
@@ -99,6 +122,13 @@ def run_telegram_setup(args: Any) -> None:
     env_display = _display_path(env_file)
     targeted_update = _has_targeted_update_args(args)
     print("Telegram Gateway Setup")
+    codex_bin = (
+        os.environ.get("CODEX_GATEWAY_CODEX_BIN")
+        or _existing_value(existing, "CODEX_GATEWAY_CODEX_BIN")
+        or GATEWAY_ENV_KEYS["CODEX_GATEWAY_CODEX_BIN"]
+    )
+    codex_status = _print_codex_cli_status(codex_bin)
+    _maybe_prompt_codex_login(codex_status)
     existing_token = _existing_value(
         existing,
         "CODEX_GATEWAY_TELEGRAM_BOT_TOKEN",
@@ -118,6 +148,12 @@ def run_telegram_setup(args: Any) -> None:
         "CODEX_GATEWAY_TELEGRAM_STATE_DIR",
         "CODEX_TELEGRAM_STATE_DIR",
     )
+    existing_model = _existing_value(existing, "CODEX_GATEWAY_TELEGRAM_MODEL", "CODEX_TELEGRAM_MODEL")
+    existing_effort = _existing_value(
+        existing,
+        "CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT",
+        "CODEX_TELEGRAM_MODEL_REASONING_EFFORT",
+    )
     existing_permission_choice = _permission_choice_from_existing(existing)
     _print_existing_setup_defaults(
         env_display=env_display,
@@ -125,6 +161,8 @@ def run_telegram_setup(args: Any) -> None:
         user_id=existing_user_id,
         workspace_roots=existing_allowed_root,
         default_workspace=existing_default_cwd,
+        model=existing_model,
+        effort=existing_effort,
         permission_choice=existing_permission_choice if _existing_permission_configured(existing) else None,
     )
 
@@ -147,6 +185,13 @@ def run_telegram_setup(args: Any) -> None:
         default_allowed_root=existing_allowed_root,
         default_default_cwd=existing_default_cwd,
         use_existing_without_prompt=targeted_update,
+    )
+    model, model_effort = _initial_model_values(
+        getattr(args, "model", None),
+        getattr(args, "reasoning_effort", None),
+        default_model=existing_model,
+        default_effort=existing_effort,
+        use_default_without_prompt=targeted_update,
     )
     state_dir = str(args.state_dir or existing_state_dir or SETUP_STATE_DIR_DEFAULT).strip()
     permission_choice = _permission_profile_prompt(
@@ -173,6 +218,8 @@ def run_telegram_setup(args: Any) -> None:
             "CODEX_GATEWAY_TELEGRAM_STATE_DIR": state_dir,
             "CODEX_GATEWAY_ALLOWED_ROOTS": allowed_roots,
             "CODEX_GATEWAY_DEFAULT_CWD": default_cwd,
+            "CODEX_GATEWAY_TELEGRAM_MODEL": model,
+            "CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT": model_effort,
             "CODEX_GATEWAY_TELEGRAM_PERMISSION_PROFILE": permission_choice.profile,
             "CODEX_GATEWAY_TELEGRAM_SANDBOX": permission_choice.sandbox,
             "CODEX_GATEWAY_TELEGRAM_APPROVAL_POLICY": permission_choice.approval_policy,
@@ -183,6 +230,7 @@ def run_telegram_setup(args: Any) -> None:
     print()
     print("Setup Complete")
     print(f"  Telegram gateway setup written to {env_display}.")
+    print(f"  Initial model preference: {model} {model_effort}.")
     print(f"  Default permission profile: {permission_choice.label}.")
     print("  Workspace roots can contain multiple directories separated by semicolon or comma.")
     print("  Telegram /setcwd persists per chat until /setcwd, /workspace set, or /reset changes it.")
@@ -355,6 +403,72 @@ def _default_workspace_for_roots(allowed_roots: str) -> str | None:
     return parts[0] if parts else None
 
 
+def _initial_model_values(
+    model: str | None,
+    effort: str | None,
+    *,
+    default_model: str | None = None,
+    default_effort: str | None = None,
+    use_default_without_prompt: bool = False,
+) -> tuple[str, str]:
+    resolved_default_model = default_model or SETUP_MODEL_DEFAULT
+    resolved_default_effort = _reasoning_effort_value(default_effort) or SETUP_REASONING_EFFORT_DEFAULT
+    if model is not None or effort is not None:
+        model_value, effort_value = _split_model_preference(model or resolved_default_model)
+        if effort is not None:
+            effort_value = _reasoning_effort_value(effort)
+            if effort_value is None:
+                raise SystemExit("Use --reasoning-effort <none|minimal|low|medium|high|xhigh>.")
+        return model_value or resolved_default_model, effort_value or resolved_default_effort
+    if use_default_without_prompt:
+        return resolved_default_model, resolved_default_effort
+
+    default_label = f"{resolved_default_model} {resolved_default_effort}"
+    if default_model or default_effort:
+        default_label = f"existing {default_label}; Enter keeps it"
+    value = _prompt(
+        "Initial model",
+        None,
+        f"{resolved_default_model} {resolved_default_effort}",
+        default_label=default_label,
+        help_text=MODEL_HELP,
+        help_title="Initial Model",
+    )
+    model_value, effort_value = _split_model_preference(value)
+    return model_value or resolved_default_model, effort_value or resolved_default_effort
+
+
+def _split_model_preference(value: str) -> tuple[str, str | None]:
+    stripped = value.strip()
+    if not stripped:
+        return "", None
+    parts = stripped.split()
+    if len(parts) >= 2:
+        effort = _reasoning_effort_value(parts[-1])
+        if effort is not None:
+            return " ".join(parts[:-1]).strip(), effort
+    return stripped, None
+
+
+def _reasoning_effort_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().casefold().replace("_", "-").replace(" ", "-")
+    aliases = {
+        "none": "none",
+        "minimal": "minimal",
+        "min": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "med": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "extra-high": "xhigh",
+        "extra": "xhigh",
+    }
+    return aliases.get(normalized)
+
+
 def _print_existing_setup_defaults(
     *,
     env_display: str,
@@ -362,6 +476,8 @@ def _print_existing_setup_defaults(
     user_id: str | None,
     workspace_roots: str | None,
     default_workspace: str | None,
+    model: str | None,
+    effort: str | None,
     permission_choice: PermissionProfileChoice | None,
 ) -> None:
     rows: list[tuple[str, str]] = []
@@ -373,6 +489,8 @@ def _print_existing_setup_defaults(
         rows.append(("Workspace root(s)", workspace_roots))
     if default_workspace:
         rows.append(("Default workspace", default_workspace))
+    if model or effort:
+        rows.append(("Initial model", f"{model or SETUP_MODEL_DEFAULT} {effort or SETUP_REASONING_EFFORT_DEFAULT}"))
     if permission_choice:
         rows.append(("Permission profile", permission_choice.label))
     if rows:
@@ -390,6 +508,143 @@ def _print_setup_section(title: str, body: str) -> None:
         for line in wrapped:
             print(f"  {line}")
     print()
+
+
+def _print_codex_cli_status(codex_bin: str) -> CodexCliStatus:
+    print()
+    print("Codex CLI")
+    resolved = shutil.which(codex_bin)
+    if resolved is None:
+        print(f"  {codex_bin} was not found on PATH.")
+        print(f"  Install Codex CLI, then run `{codex_bin} login --device-auth` before starting the gateway.")
+        return CodexCliStatus(codex_bin=codex_bin, resolved=None, logged_in=False, status_text="")
+
+    try:
+        result = subprocess.run(
+            [resolved, "login", "status"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=_codex_subprocess_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"  Could not check `{codex_bin} login status`: {exc}.")
+        print(f"  Run `{codex_bin} login --device-auth` before starting the gateway.")
+        return CodexCliStatus(codex_bin=codex_bin, resolved=resolved, logged_in=False, status_text=str(exc))
+
+    status_text = _first_nonempty_line(result.stdout, result.stderr)
+    if result.returncode == 0 and status_text.casefold().startswith("logged in"):
+        print(f"  {status_text}")
+        return CodexCliStatus(codex_bin=codex_bin, resolved=resolved, logged_in=True, status_text=status_text)
+
+    print("  Not logged in.")
+    if status_text and status_text.casefold() != "not logged in":
+        print(f"  {status_text}")
+    print(f"  Run `{codex_bin} login --device-auth` before starting the gateway.")
+    if os.environ.get("CODEX_ACCESS_TOKEN"):
+        for line in CODEX_ACCESS_TOKEN_HELP_LINES:
+            print(f"  {line}")
+    return CodexCliStatus(codex_bin=codex_bin, resolved=resolved, logged_in=False, status_text=status_text)
+
+
+def _maybe_prompt_codex_login(
+    status: CodexCliStatus,
+    *,
+    input_func: Any = input,
+    secret_func: Any = getpass.getpass,
+) -> None:
+    if not status.resolved or not _is_interactive_terminal():
+        return
+
+    print()
+    print("Codex Login")
+    if status.logged_in:
+        print("  1. Reuse existing Codex login")
+        print("  2. ChatGPT device auth")
+        print("  3. Access token")
+        selected = input_func("Select login method [1 Reuse existing Codex login]: ").strip().casefold()
+        if selected in {"", "1", "reuse", "existing", "keep", "current"}:
+            print("  Reusing existing Codex login.")
+            return
+        if selected in {"2", "chatgpt", "device", "device-auth", "device auth"}:
+            _run_codex_login(status.resolved, status.codex_bin, "--device-auth")
+            return
+        if selected in {"3", "token", "access-token", "access token"}:
+            token = _codex_access_token_value(secret_func)
+            if not token:
+                print("  Reusing existing Codex login; no access token was provided.")
+                return
+            _run_codex_login(status.resolved, status.codex_bin, "--with-access-token", token=token)
+            return
+        print("  Reusing existing Codex login.")
+        return
+
+    print("  1. ChatGPT device auth")
+    print("  2. Access token")
+    print("  3. Skip for now")
+    selected = input_func("Select login method [1 ChatGPT device auth]: ").strip().casefold()
+    if selected in {"", "1", "chatgpt", "device", "device-auth", "device auth"}:
+        _run_codex_login(status.resolved, status.codex_bin, "--device-auth")
+        return
+    if selected in {"2", "token", "access-token", "access token"}:
+        token = _codex_access_token_value(secret_func)
+        if not token:
+            print("  Skipping Codex login; no access token was provided.")
+            return
+        _run_codex_login(status.resolved, status.codex_bin, "--with-access-token", token=token)
+        return
+    print(f"  Skipping Codex login; run `{status.codex_bin} login --device-auth` before starting the gateway.")
+
+
+def _codex_access_token_value(secret_func: Any) -> str:
+    token = os.environ.get("CODEX_ACCESS_TOKEN")
+    if token:
+        return token
+    return secret_func("Codex access token: ").strip()
+
+
+def _run_codex_login(resolved: str, codex_bin: str, mode: str, *, token: str | None = None) -> None:
+    print()
+    if mode == "--with-access-token":
+        print(f"Running `{codex_bin} login --with-access-token`.")
+        result = subprocess.run(
+            [resolved, "login", "--with-access-token"],
+            input=f"{token or ''}\n",
+            text=True,
+            check=False,
+            env=_codex_subprocess_env(),
+        )
+    else:
+        print(f"Running `{codex_bin} login --device-auth`.")
+        result = subprocess.run(
+            [resolved, "login", "--device-auth"],
+            check=False,
+            env=_codex_subprocess_env(),
+        )
+    if result.returncode != 0:
+        print(f"  Codex login exited with status {result.returncode}; setup can continue, but run login before starting the gateway.")
+
+
+def _is_interactive_terminal() -> bool:
+    return bool(getattr(sys.stdin, "isatty", lambda: False)() and getattr(sys.stdout, "isatty", lambda: False)())
+
+
+def _codex_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("CODEX_ACCESS_TOKEN", None)
+    return env
+
+
+def _first_nonempty_line(*values: str | None) -> str:
+    for value in values:
+        if not value:
+            continue
+        for line in value.splitlines():
+            stripped = line.strip()
+            if stripped:
+                return stripped
+    return ""
 
 
 def _existing_permission_configured(existing: dict[str, str]) -> bool:
@@ -502,6 +757,8 @@ def _has_targeted_update_args(args: Any) -> bool:
             "default_cwd",
             "state_dir",
             "permission_profile",
+            "model",
+            "reasoning_effort",
         )
     )
 

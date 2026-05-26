@@ -12,6 +12,14 @@ from codex_gateway.gateways.telegram.config import (
 )
 
 
+def _use_legacy_workspace_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, root: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CODEX_GATEWAY_ALLOWED_ROOTS", raising=False)
+    monkeypatch.delenv("CODEX_GATEWAY_DEFAULT_CWD", raising=False)
+    monkeypatch.setenv("CODEX_TELEGRAM_ALLOWED_ROOTS", str(root))
+    monkeypatch.setenv("CODEX_TELEGRAM_DEFAULT_CWD", str(root))
+
+
 def test_defaults_use_relative_project_locations(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("CODEX_GATEWAY_ALLOWED_ROOTS", raising=False)
     monkeypatch.delenv("CODEX_GATEWAY_DEFAULT_CWD", raising=False)
@@ -37,8 +45,7 @@ def test_defaults_use_relative_project_locations(monkeypatch, tmp_path: Path) ->
 def test_resolve_relative_workspace_under_allowed_root(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / "projects"
     root.mkdir()
-    monkeypatch.setenv("CODEX_TELEGRAM_ALLOWED_ROOTS", str(root))
-    monkeypatch.setenv("CODEX_TELEGRAM_DEFAULT_CWD", str(root))
+    _use_legacy_workspace_env(monkeypatch, tmp_path, root)
 
     settings = get_telegram_settings()
 
@@ -49,8 +56,7 @@ def test_resolve_absolute_workspace_under_allowed_root(monkeypatch, tmp_path: Pa
     root = tmp_path / "projects"
     root.mkdir()
     repo = root / "repo-a"
-    monkeypatch.setenv("CODEX_TELEGRAM_ALLOWED_ROOTS", str(root))
-    monkeypatch.setenv("CODEX_TELEGRAM_DEFAULT_CWD", str(root))
+    _use_legacy_workspace_env(monkeypatch, tmp_path, root)
 
     settings = get_telegram_settings()
 
@@ -61,8 +67,7 @@ def test_resolve_rejects_absolute_workspace_outside_allowed_roots(monkeypatch, t
     root = tmp_path / "projects"
     other = tmp_path / "other" / "repo-a"
     root.mkdir()
-    monkeypatch.setenv("CODEX_TELEGRAM_ALLOWED_ROOTS", str(root))
-    monkeypatch.setenv("CODEX_TELEGRAM_DEFAULT_CWD", str(root))
+    _use_legacy_workspace_env(monkeypatch, tmp_path, root)
 
     settings = get_telegram_settings()
 
@@ -73,13 +78,12 @@ def test_resolve_rejects_absolute_workspace_outside_allowed_roots(monkeypatch, t
 def test_resolve_rejects_relative_workspace_escape(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / "projects"
     root.mkdir()
-    monkeypatch.setenv("CODEX_TELEGRAM_ALLOWED_ROOTS", str(root))
-    monkeypatch.setenv("CODEX_TELEGRAM_DEFAULT_CWD", str(root))
+    _use_legacy_workspace_env(monkeypatch, tmp_path, root)
 
     settings = get_telegram_settings()
 
     with pytest.raises(TelegramSettingsError, match="allowed roots"):
-        resolve_workspace(settings, "..\\Windows")
+        resolve_workspace(settings, "../Windows")
 
 
 def test_path_containment_uses_resolved_paths(tmp_path: Path) -> None:

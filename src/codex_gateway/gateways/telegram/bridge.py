@@ -568,7 +568,13 @@ class TelegramBridge(
                 "settings": {
                     "developer_instructions": None,
                     "model": model,
-                    "reasoning_effort": self._thread_mode_setting(chat_id, workspace, "effort", mode_name="default"),
+                    "reasoning_effort": self._thread_mode_setting(
+                        chat_id,
+                        workspace,
+                        "effort",
+                        mode_name="default",
+                    )
+                    or self.settings.model_reasoning_effort,
                 },
             }
         existing_thread_id = str(self._thread_record(chat_id, workspace).get("thread_id") or "")

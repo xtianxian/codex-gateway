@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="${CODEX_GATEWAY_DOCKER_PROJECT_DIR:-/repo}"
+RUNTIME_DIR="${CODEX_GATEWAY_DOCKER_RUNTIME_DIR:-/work}"
+CONFIG_DIR="${CODEX_GATEWAY_DOCKER_CONFIG_DIR:-/config}"
+ENV_FILE="${RUNTIME_DIR}/.env"
+CONFIG_ENV_FILE="${CONFIG_DIR}/.env"
+
+ensure_runtime() {
+  mkdir -p \
+    "${PROJECT_DIR}" \
+    "${RUNTIME_DIR}/workspace" \
+    "${RUNTIME_DIR}/.codex-gateway/telegram" \
+    "${CONFIG_DIR}" \
+    "${CODEX_HOME:-/codex-home}" \
+    "${HOME:-/home/codex}/.cache/uv"
+
+  if [ -e "${ENV_FILE}" ] && [ ! -L "${ENV_FILE}" ] && [ ! -e "${CONFIG_ENV_FILE}" ]; then
+    mv "${ENV_FILE}" "${CONFIG_ENV_FILE}"
+  fi
+  if [ -e "${ENV_FILE}" ] && [ ! -L "${ENV_FILE}" ]; then
+    rm -f "${ENV_FILE}"
+  fi
+  if [ ! -L "${ENV_FILE}" ]; then
+    ln -s "${CONFIG_ENV_FILE}" "${ENV_FILE}"
+  fi
+}
+
+gateway() {
+  uv --project "${PROJECT_DIR}" run --directory "${RUNTIME_DIR}" codex-gateway telegram "$@"
+}
+
+sync_project() {
+  uv --project "${PROJECT_DIR}" sync --extra dev
+}
+
+clear_codex_access_token() {
+  unset CODEX_ACCESS_TOKEN
+}
+
+codex_login() {
+  if [ "$#" -gt 0 ]; then
+    exec codex login "$@"
+  fi
+  if [ -n "${CODEX_ACCESS_TOKEN:-}" ]; then
+    printf '%s\n' "Using CODEX_ACCESS_TOKEN for codex login --with-access-token."
+    printf '%s\n' "${CODEX_ACCESS_TOKEN}" | codex login --with-access-token
+    clear_codex_access_token
+    return
+  fi
+  codex login --device-auth
+}
+
+ensure_runtime
+
+command_name="${1:-run}"
+if [ "$#" -gt 0 ]; then
+  shift
+fi
+
+case "${command_name}" in
+  login)
+    codex_login "$@"
+    ;;
+  login-status|auth-status)
+    exec codex login status "$@"
+    ;;
+  codex)
+    exec codex "$@"
+    ;;
+  setup)
+    exec uv --project "${PROJECT_DIR}" run --directory "${RUNTIME_DIR}" \
+      codex-gateway telegram setup --env-file "${ENV_FILE}" "$@"
+    ;;
+  run)
+    if [ ! -s "${CONFIG_ENV_FILE}" ]; then
+      echo "Docker gateway is not configured yet." >&2
+      echo "Run: docker compose -f testing/docker/compose.linux.yaml run --rm codex-gateway-setup" >&2
+      exit 2
+    fi
+    exec uv --project "${PROJECT_DIR}" run --directory "${RUNTIME_DIR}" codex-gateway telegram run "$@"
+    ;;
+  status)
+    gateway status "$@"
+    ;;
+  pair)
+    gateway access pair "$@"
+    ;;
+  access)
+    gateway access "$@"
+    ;;
+  workspace)
+    gateway workspace "$@"
+    ;;
+  sync)
+    exec uv --project "${PROJECT_DIR}" sync --extra dev "$@"
+    ;;
+  test)
+    sync_project
+    exec uv --project "${PROJECT_DIR}" run --extra dev --directory "${PROJECT_DIR}" \
+      pytest -p no:cacheprovider --basetemp "${RUNTIME_DIR}/.codex-gateway/pytest-linux-full" "$@"
+    ;;
+  smoke)
+    sync_project
+    exec uv --project "${PROJECT_DIR}" run --directory "${PROJECT_DIR}" \
+      --script testing/probes/mock_bot_real_app_server_smoke.py "$@"
+    ;;
+  shell)
+    exec bash "$@"
+    ;;
+  sleep)
+    exec sleep infinity
+    ;;
+  raw)
+    exec "$@"
+    ;;
+  *)
+    exec "${command_name}" "$@"
+    ;;
+esac

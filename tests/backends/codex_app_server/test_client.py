@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,7 @@ async def _complete(
     return await task
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows .cmd shim resolution is Windows-only.")
 def test_windows_command_resolution_uses_cmd_shim(monkeypatch, tmp_path: Path) -> None:
     codex_cmd = tmp_path / "codex.cmd"
     codex_cmd.write_text("@echo off\n", encoding="utf-8")

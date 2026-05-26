@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1
+
+FROM python:3.11-bookworm
+
+ARG CODEX_CLI_VERSION=0.133.0
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    HOME=/home/codex \
+    CODEX_HOME=/codex-home \
+    UV_PROJECT_ENVIRONMENT=/repo/.venv \
+    UV_LINK_MODE=copy \
+    PYTHONUTF8=1 \
+    PYTHONIOENCODING=utf-8
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        curl \
+        git \
+        nodejs \
+        npm \
+        tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /codex-home \
+    && python -m pip install --no-cache-dir uv \
+    && npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
+    && codex --version \
+    && uv --version
+
+RUN useradd --create-home --uid 1000 --shell /bin/bash codex \
+    && mkdir -p /repo/.venv /work/workspace /work/.codex-gateway/telegram /config /codex-home /home/codex/.cache/uv \
+    && chown -R codex:codex /repo /work /config /codex-home /home/codex
+
+COPY testing/docker/codex-gateway-docker /usr/local/bin/codex-gateway-docker
+RUN chmod 0755 /usr/local/bin/codex-gateway-docker
+
+USER codex
+WORKDIR /work
+
+ENV CODEX_GATEWAY_ALLOWED_ROOTS=/work/workspace \
+    CODEX_GATEWAY_DEFAULT_CWD=/work/workspace \
+    CODEX_GATEWAY_TELEGRAM_STATE_DIR=/work/.codex-gateway/telegram \
+    CODEX_GATEWAY_CODEX_BIN=codex \
+    CODEX_GATEWAY_APP_SERVER_URL=ws://127.0.0.1:8765 \
+    CODEX_GATEWAY_APP_SERVER_TRANSPORT=websocket
+
+ENTRYPOINT ["tini", "--", "codex-gateway-docker"]
+CMD ["sleep"]

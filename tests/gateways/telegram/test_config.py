@@ -13,6 +13,8 @@ GATEWAY_ENV_NAMES = [
     "CODEX_GATEWAY_TELEGRAM_ALLOWED_USER_ID",
     "CODEX_GATEWAY_TELEGRAM_USER_ID",
     "CODEX_GATEWAY_TELEGRAM_PERMISSION_PROFILE",
+    "CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT",
+    "CODEX_GATEWAY_TELEGRAM_PAIR_COMMAND",
     "CODEX_GATEWAY_APP_SERVER_TRANSPORT",
     "CODEX_GATEWAY_CODEX_BIN",
     "CODEX_TELEGRAM_ALLOWED_ROOTS",
@@ -22,6 +24,7 @@ GATEWAY_ENV_NAMES = [
     "CODEX_TELEGRAM_ALLOWED_USER_ID",
     "CODEX_TELEGRAM_USER_ID",
     "CODEX_TELEGRAM_PERMISSION_PROFILE",
+    "CODEX_TELEGRAM_MODEL_REASONING_EFFORT",
 ]
 
 
@@ -60,6 +63,9 @@ def test_gateway_env_vars_override_legacy_telegram_env_vars(monkeypatch, tmp_pat
     monkeypatch.setenv("CODEX_GATEWAY_APP_SERVER_TRANSPORT", "stdio")
     monkeypatch.setenv("CODEX_GATEWAY_CODEX_BIN", "codex-test")
     monkeypatch.setenv("CODEX_GATEWAY_TELEGRAM_ALLOWED_USER_ID", "123456")
+    monkeypatch.setenv("CODEX_GATEWAY_TELEGRAM_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT", "medium")
+    monkeypatch.setenv("CODEX_GATEWAY_TELEGRAM_PAIR_COMMAND", "docker pair {code}")
 
     settings = get_telegram_settings()
 
@@ -68,6 +74,9 @@ def test_gateway_env_vars_override_legacy_telegram_env_vars(monkeypatch, tmp_pat
     assert settings.app_server_transport == "stdio"
     assert settings.codex_bin == "codex-test"
     assert settings.allowed_user_id == "123456"
+    assert settings.model == "gpt-5.4-mini"
+    assert settings.model_reasoning_effort == "medium"
+    assert settings.pair_command_template == "docker pair {code}"
 
 
 def test_dotenv_values_are_used_when_environment_is_empty(monkeypatch, tmp_path: Path) -> None:
@@ -80,6 +89,8 @@ def test_dotenv_values_are_used_when_environment_is_empty(monkeypatch, tmp_path:
                 "CODEX_GATEWAY_TELEGRAM_STATE_DIR=.codex-gateway/telegram",
                 "CODEX_GATEWAY_TELEGRAM_ALLOWED_USER_ID=123456",
                 "CODEX_GATEWAY_TELEGRAM_PERMISSION_PROFILE=:auto-review",
+                "CODEX_GATEWAY_TELEGRAM_MODEL=gpt-5.4-mini",
+                "CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT=medium",
                 "CODEX_GATEWAY_ALLOWED_ROOTS=.",
                 "CODEX_GATEWAY_DEFAULT_CWD=.",
                 "CODEX_GATEWAY_APP_SERVER_TRANSPORT=stdio",
@@ -98,6 +109,8 @@ def test_dotenv_values_are_used_when_environment_is_empty(monkeypatch, tmp_path:
     assert settings.app_server_transport == "stdio"
     assert settings.allowed_user_id == "123456"
     assert settings.permission_profile == ":auto-review"
+    assert settings.model == "gpt-5.4-mini"
+    assert settings.model_reasoning_effort == "medium"
 
 
 def test_environment_values_override_dotenv(monkeypatch, tmp_path: Path) -> None:

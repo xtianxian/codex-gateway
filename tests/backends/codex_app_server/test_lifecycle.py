@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 import pytest
@@ -159,6 +160,7 @@ def test_fixed_loopback_port_requires_nonzero_loopback_port() -> None:
     assert _fixed_loopback_port("ws://192.0.2.1:8765") is None
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows .cmd shim resolution is Windows-only.")
 def test_process_manager_resolves_windows_command_shim(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     from codex_gateway.backends.codex_app_server.lifecycle import _resolve_executable
 

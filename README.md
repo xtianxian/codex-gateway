@@ -103,12 +103,20 @@ Codex authentication comes from your local `codex` CLI/app-server session. This
 gateway is for a Codex-capable ChatGPT account or subscription; it does not ask
 for or use an OpenAI API key such as `OPENAI_API_KEY` to run Codex. If
 `codex login status` shows you are not signed in, run `codex login` before
-starting the gateway.
+starting the gateway. Docker setup can also seed the container's Codex CLI
+session from `CODEX_ACCESS_TOKEN`; that token is read only by `codex login
+--with-access-token`.
 
 ## Compatibility
 
 This alpha targets the Codex app-server protocol schema generated with
 `codex-cli 0.133.0`.
+
+Validated local targets are Windows foreground/service operation and WSL2
+Ubuntu 24.04 foreground/system-service operation. The WSL validation used
+distro name `Ubuntu`, Codex CLI `0.133.0`, uv `0.11.16`, repo path
+`~/src/codex-gateway`, workspace `~/codex-gateway-workspace`, and state
+`~/.local/state/codex-gateway/telegram`.
 
 The gateway talks to local Codex app-server over loopback WebSocket by default.
 If Codex app-server changes its generated schema, regenerate the checked-in
@@ -178,13 +186,110 @@ uv run codex-gateway telegram status
 uv run codex-gateway telegram run
 ```
 
+For an opted-in Docker runtime from a Windows host, use the Docker Compose
+target. It installs the pinned Codex CLI version and keeps Codex home, gateway
+configuration, gateway state, workspace data, and uv cache in Docker volumes:
+
+```powershell
+docker compose -f testing\docker\compose.linux.yaml build
+docker compose -f testing\docker\compose.linux.yaml run --rm codex-gateway-setup
+docker compose -f testing\docker\compose.linux.yaml run --rm codex-gateway-cli status
+docker compose -f testing\docker\compose.linux.yaml up -d codex-gateway
+docker compose -f testing\docker\compose.linux.yaml logs -f codex-gateway
+```
+
+Stop the Windows `CodexGateway` service and any WSL gateway before starting the
+Docker gateway with the same Telegram bot token. Pairing commands run through
+the Docker CLI service:
+
+```powershell
+docker compose -f testing\docker\compose.linux.yaml run --rm codex-gateway-cli pair CODE-HERE
+```
+
+Docker setup uses the same interactive Codex login check as local setup. If the
+persistent `codex-home` volume is already signed in, the default choice is to
+reuse it. If it is not signed in, the default choice is ChatGPT device auth, and
+access-token auth is the secondary choice. To use an access token from
+`https://developers.openai.com/codex/auth`, set it before setup and select the
+access-token option when prompted:
+
+```powershell
+$env:CODEX_ACCESS_TOKEN = "<codex-access-token>"
+docker compose -f testing\docker\compose.linux.yaml run --rm codex-gateway-setup
+Remove-Item Env:CODEX_ACCESS_TOKEN
+```
+
+To refresh Codex auth later:
+
+```powershell
+docker compose -f testing\docker\compose.linux.yaml run --rm codex-gateway-login
+```
+
+For Linux compatibility checks in Docker, run the test harness profile:
+
+```powershell
+docker compose -f testing\docker\compose.linux.yaml run --rm codex-gateway-cli test
+docker compose -f testing\docker\compose.linux.yaml run --rm codex-gateway-cli smoke
+```
+
+For a normal WSL2 Ubuntu run from a Windows host, install Ubuntu 24.04 onto an
+ext4 virtual disk, copy the repo into WSL, authenticate Codex inside WSL, and
+use WSL-local workspace/state paths:
+
+```powershell
+wsl --install Ubuntu-24.04 --name Ubuntu --location E:\WSL\ubuntu --version 2
+```
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git nodejs npm rsync
+curl -LsSf https://astral.sh/uv/install.sh | sh
+sudo npm install -g @openai/codex@0.133.0
+export PATH="$HOME/.local/bin:$PATH"
+mkdir -p ~/src ~/codex-gateway-workspace ~/.local/state/codex-gateway/telegram
+rsync -a --delete --include='.env.example' --exclude='.env' --exclude='.env.*' \
+  --exclude='.*venv/' --exclude='.pytest_cache/' --exclude='.ruff_cache/' \
+  --exclude='.codex-gateway/' --exclude='workspace/' --exclude='testing/artifacts/' \
+  /mnt/e/Projects/codex-gateway/ ~/src/codex-gateway/
+cd ~/src/codex-gateway
+codex login status
+uv sync --extra dev
+uv run pytest -p no:cacheprovider --basetemp ~/.local/state/codex-gateway/pytest-wsl-full
+uv run codex-gateway telegram setup \
+  --allowed-root ~/codex-gateway-workspace \
+  --default-cwd ~/codex-gateway-workspace \
+  --state-dir ~/.local/state/codex-gateway/telegram
+```
+
+Stop the Windows `CodexGateway` service before running a WSL foreground or
+system-service gateway with the same Telegram bot token, then restart the
+Windows service when the WSL run is stopped. For background WSL operation, use
+a system service with `User=<your-linux-user>` rather than a user service; see
+`RUNBOOK.md` for a discovery-based unit generator.
+
+WSL systemd starts the gateway service when the distro is running, but it does
+not keep the WSL distro alive by itself. For continuous WSL operation from a
+Windows host, start a host-side WSL keepalive after enabling the system service:
+
+```powershell
+wsl.exe -d Ubuntu -u root --exec bash -lc "systemctl start codex-gateway.service; exec sleep infinity"
+```
+
+Run that from a persistent terminal or wrap it in a hidden `Start-Process`
+startup entry. This keepalive is WSL-specific and is not needed on normal
+Linux, where the system service keeps running while the OS is running.
+
 `telegram setup` writes a local `.env` file, creates the default workspace, and
-sets the one Telegram user ID allowed to request pairing. Workspace roots can be
-one directory or multiple directories separated by semicolon or comma. You can
-rerun setup later; it detects existing `.env` values and pressing Enter keeps
-the current token, user ID, workspace roots, default workspace, and default
-permission profile. Existing values are shown in an `Existing Setup Detected`
-section before the prompts.
+sets the one Telegram user ID allowed to request pairing. It also checks that
+the configured Codex CLI is installed and reports whether `codex login status`
+is already signed in. In an interactive terminal, setup asks whether to reuse an
+existing Codex login or relogin; when Codex is not signed in, it asks whether to
+login with ChatGPT device auth, use an access token, or skip for now. Workspace
+roots can be one directory or multiple directories separated by semicolon or
+comma. You can rerun setup later; it detects existing `.env` values and pressing
+Enter keeps the current token, user ID, workspace roots, default workspace,
+initial model preference, and default permission profile. Existing values are
+shown in an `Existing Setup Detected` section before the prompts.
 
 Telegram keeps the active workspace per chat. `/setcwd` or `/workspace set`
 changes it, `/new` and `/clear` keep using it, and `/start` does not reset it.
@@ -321,10 +426,12 @@ override `.env` values.
 | `CODEX_GATEWAY_CODEX_BIN` | Codex executable, default `codex`. |
 | `CODEX_GATEWAY_APP_SERVER_URL` | Loopback WebSocket URL, default `ws://127.0.0.1:8765`. |
 | `CODEX_GATEWAY_APP_SERVER_TRANSPORT` | `websocket` or `stdio`, default `websocket`. |
-| `CODEX_GATEWAY_TELEGRAM_MODEL` | Optional model override for new threads. |
+| `CODEX_GATEWAY_TELEGRAM_MODEL` | Initial model for new threads before a chat chooses one with `/model`; setup defaults to `gpt-5.4-mini`. |
+| `CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT` | Initial reasoning effort for that model; setup defaults to `medium`. |
 | `CODEX_GATEWAY_TELEGRAM_PERMISSION_PROFILE` | Default permissions for new Telegram threads: `:read-only`, `:workspace`, `:auto-review`, or `:danger-full-access`. |
 | `CODEX_GATEWAY_TELEGRAM_SANDBOX` | Sandbox setting for app-server threads. |
 | `CODEX_GATEWAY_TELEGRAM_APPROVAL_POLICY` | Approval policy for app-server requests. |
+| `CODEX_GATEWAY_TELEGRAM_PAIR_COMMAND` | Pairing command template shown by `/start`; use `{code}` where the generated code belongs. |
 | `CODEX_GATEWAY_ENABLE_EXEC` | Enables `/exec` when set to `1`. |
 | `CODEX_GATEWAY_ADVERTISE_EXEC` | Shows `/exec` in Telegram when set to `1`. |
 
@@ -488,6 +595,19 @@ uv run --script testing\probes\mock_bot_real_app_server_smoke.py --include-turns
 The smoke probe requires an authenticated Codex CLI and may start a real local
 app-server process.
 
+Linux container verification:
+
+```powershell
+docker compose -f testing\docker\compose.linux.yaml build
+docker compose -f testing\docker\compose.linux.yaml run --rm codex-gateway-cli test
+```
+
+WSL2 Ubuntu verification:
+
+```powershell
+wsl -d Ubuntu -e bash -lc 'cd ~/src/codex-gateway && uv run pytest -p no:cacheprovider --basetemp ~/.local/state/codex-gateway/pytest-wsl-full'
+```
+
 ## Repository Layout
 
 | Path | Purpose |
@@ -497,4 +617,5 @@ app-server process.
 | `src/codex_gateway/gateways/telegram` | Telegram bridge, Bot API client, commands, setup, access control, and local state. |
 | `tests` | Unit and async behavior tests. |
 | `testing/probes` | Optional smoke probes. |
+| `testing/docker` | Docker runtime and Linux test harness with Codex CLI installed. |
 | `scripts` | Windows setup and service helpers. |

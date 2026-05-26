@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from codex_gateway import __main__ as cli
+from codex_gateway.gateways.telegram import setup as telegram_setup_module
 from codex_gateway.gateways.telegram.access import AccessManager
 from codex_gateway.gateways.telegram.config import get_telegram_settings
 from codex_gateway.gateways.telegram.state import TelegramStateStore
@@ -156,11 +158,14 @@ def test_telegram_setup_writes_relative_env_without_pairing_code(monkeypatch, tm
     assert "CODEX_GATEWAY_ALLOWED_ROOTS=." in env_text
     assert "CODEX_GATEWAY_DEFAULT_CWD=." in env_text
     assert "CODEX_GATEWAY_TELEGRAM_STATE_DIR=.codex-gateway/telegram" in env_text
+    assert "CODEX_GATEWAY_TELEGRAM_MODEL=gpt-5.4-mini" in env_text
+    assert "CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT=medium" in env_text
     assert "CODEX_GATEWAY_TELEGRAM_PERMISSION_PROFILE=:workspace" in env_text
     assert "CODEX_GATEWAY_TELEGRAM_APPROVAL_POLICY=on-request" in env_text
     assert str(tmp_path) not in env_text
 
     output = capsys.readouterr().out
+    assert "Initial model preference: gpt-5.4-mini medium." in output
     assert "Default permission profile: Default." in output
     assert "Only the configured Telegram user can send /start to get the pairing command." in output
     assert re.search(r"/start [A-Z0-9]{4}-[A-Z0-9]{4}", output) is None
@@ -198,6 +203,8 @@ def test_telegram_setup_defaults_to_workspace_directory(monkeypatch, tmp_path: P
     assert "CODEX_GATEWAY_DEFAULT_CWD=workspace" in env_text
     assert "CODEX_GATEWAY_TELEGRAM_ALLOWED_USER_ID=123" in env_text
     assert "CODEX_GATEWAY_TELEGRAM_STATE_DIR=.codex-gateway/telegram" in env_text
+    assert "CODEX_GATEWAY_TELEGRAM_MODEL=gpt-5.4-mini" in env_text
+    assert "CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT=medium" in env_text
     assert "CODEX_GATEWAY_TELEGRAM_PERMISSION_PROFILE=:workspace" in env_text
     assert (tmp_path / "workspace").is_dir()
     assert prompts == ["Telegram user ID: ", "Workspace root(s) [workspace]: "]
@@ -238,9 +245,113 @@ def test_telegram_setup_prints_token_and_workspace_guidance(monkeypatch, tmp_pat
         "Telegram bot token: ",
         "Telegram user ID: ",
         "Workspace root(s) [workspace]: ",
+        "Initial model [gpt-5.4-mini medium]: ",
         "Select profile [2 Default]: ",
     ]
+    assert "Initial Model" in output
     assert "Default Permission Profile" in output
+
+
+def test_telegram_setup_reports_codex_cli_login_status(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(telegram_setup_module.shutil, "which", lambda _name: "codex")
+
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0, stdout="Logged in as user@example.test\n", stderr="")
+
+    monkeypatch.setattr(telegram_setup_module.subprocess, "run", fake_run)
+
+    telegram_setup_module._print_codex_cli_status("codex")
+
+    output = capsys.readouterr().out
+    assert "Codex CLI" in output
+    assert "Logged in as user@example.test" in output
+
+
+def test_telegram_setup_reports_access_token_as_secondary_auth(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("CODEX_ACCESS_TOKEN", "secret-token")
+    monkeypatch.setattr(telegram_setup_module.shutil, "which", lambda _name: "codex")
+
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 1, stdout="Not logged in\n", stderr="")
+
+    monkeypatch.setattr(telegram_setup_module.subprocess, "run", fake_run)
+
+    telegram_setup_module._print_codex_cli_status("codex")
+
+    output = capsys.readouterr().out
+    assert "Run `codex login --device-auth` before starting the gateway." in output
+    assert "CODEX_ACCESS_TOKEN is set" in output
+    assert "codex login --with-access-token" in output
+    assert "secret-token" not in output
+
+
+def test_telegram_setup_reuses_existing_codex_login_by_default(monkeypatch, capsys) -> None:
+    status = telegram_setup_module.CodexCliStatus(
+        codex_bin="codex",
+        resolved="codex",
+        logged_in=True,
+        status_text="Logged in as user@example.test",
+    )
+    login_calls: list[tuple[str, str | None]] = []
+    prompts: list[str] = []
+    monkeypatch.setattr(telegram_setup_module, "_is_interactive_terminal", lambda: True)
+    monkeypatch.setattr(
+        telegram_setup_module,
+        "_run_codex_login",
+        lambda _resolved, _codex_bin, mode, *, token=None: login_calls.append((mode, token)),
+    )
+
+    telegram_setup_module._maybe_prompt_codex_login(
+        status,
+        input_func=lambda prompt: prompts.append(prompt) or "",
+        secret_func=lambda _prompt: pytest.fail("unexpected access-token prompt"),
+    )
+
+    output = capsys.readouterr().out
+    assert prompts == ["Select login method [1 Reuse existing Codex login]: "]
+    assert login_calls == []
+    assert "Reusing existing Codex login." in output
+
+
+def test_telegram_setup_can_relogin_existing_codex_with_access_token(monkeypatch) -> None:
+    status = telegram_setup_module.CodexCliStatus(
+        codex_bin="codex",
+        resolved="codex",
+        logged_in=True,
+        status_text="Logged in as user@example.test",
+    )
+    login_calls: list[tuple[str, str | None]] = []
+    monkeypatch.setenv("CODEX_ACCESS_TOKEN", "secret-token")
+    monkeypatch.setattr(telegram_setup_module, "_is_interactive_terminal", lambda: True)
+    monkeypatch.setattr(
+        telegram_setup_module,
+        "_run_codex_login",
+        lambda _resolved, _codex_bin, mode, *, token=None: login_calls.append((mode, token)),
+    )
+
+    telegram_setup_module._maybe_prompt_codex_login(status, input_func=lambda _prompt: "3")
+
+    assert login_calls == [("--with-access-token", "secret-token")]
+
+
+def test_telegram_setup_prompts_device_auth_by_default_when_codex_not_logged_in(monkeypatch) -> None:
+    status = telegram_setup_module.CodexCliStatus(
+        codex_bin="codex",
+        resolved="codex",
+        logged_in=False,
+        status_text="Not logged in",
+    )
+    login_calls: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(telegram_setup_module, "_is_interactive_terminal", lambda: True)
+    monkeypatch.setattr(
+        telegram_setup_module,
+        "_run_codex_login",
+        lambda _resolved, _codex_bin, mode, *, token=None: login_calls.append((mode, token)),
+    )
+
+    telegram_setup_module._maybe_prompt_codex_login(status, input_func=lambda _prompt: "")
+
+    assert login_calls == [("--device-auth", None)]
 
 
 def test_telegram_setup_prompts_for_default_workspace_when_roots_are_multiple(
@@ -351,6 +462,8 @@ def test_telegram_setup_reuses_existing_env_for_targeted_permission_update(
     assert "CODEX_GATEWAY_TELEGRAM_ALLOWED_USER_ID=123" in env_text
     assert "CODEX_GATEWAY_ALLOWED_ROOTS=." in env_text
     assert "CODEX_GATEWAY_DEFAULT_CWD=." in env_text
+    assert "CODEX_GATEWAY_TELEGRAM_MODEL=gpt-5.4-mini" in env_text
+    assert "CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT=medium" in env_text
     assert "CODEX_GATEWAY_TELEGRAM_PERMISSION_PROFILE=:danger-full-access" in env_text
     assert "CODEX_GATEWAY_TELEGRAM_SANDBOX=danger-full-access" in env_text
     assert "CODEX_GATEWAY_TELEGRAM_APPROVAL_POLICY=never" in env_text
@@ -400,6 +513,7 @@ def test_telegram_setup_formats_existing_env_prompts(
         "Telegram bot token [existing token found; Enter keeps it]: ",
         "Telegram user ID [existing 123; Enter keeps it]: ",
         "Workspace root(s) [existing .; Enter keeps it]: ",
+        "Initial model [gpt-5.4-mini medium]: ",
         "Select profile [existing 4 Full Access; Enter keeps it]: ",
     ]
 

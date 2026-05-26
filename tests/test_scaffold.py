@@ -62,3 +62,13 @@ def test_readme_documents_codex_cli_prerequisites() -> None:
     assert "Codex CLI installed and authenticated" in text
     assert "codex --version" in text
 
+
+def test_docker_setup_supports_codex_access_token_auth() -> None:
+    wrapper = Path("testing/docker/codex-gateway-docker").read_text(encoding="utf-8")
+    compose = Path("testing/docker/compose.linux.yaml").read_text(encoding="utf-8")
+
+    assert "CODEX_ACCESS_TOKEN" in wrapper
+    assert "codex login --with-access-token" in wrapper
+    assert "codex login --device-auth" in wrapper
+    assert "CODEX_ACCESS_TOKEN: ${CODEX_ACCESS_TOKEN:-}" in compose
+

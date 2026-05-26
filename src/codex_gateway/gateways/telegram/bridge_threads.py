@@ -285,6 +285,9 @@ class TelegramBridgeThreadMixin:
             mode_payload = await self._collaboration_mode_payload_for_mode(chat_id, workspace, active_mode)
         mode_model = self._collaboration_mode_model(mode_payload)
         start_model = stored_model or mode_model or self.settings.model
+        start_effort = stored_effort or (
+            self.settings.model_reasoning_effort if active_mode == "default" else None
+        )
         thread_kwargs: dict[str, Any] = {
             "cwd": str(workspace),
             "model": start_model,
@@ -306,8 +309,8 @@ class TelegramBridgeThreadMixin:
             dynamic_tools_fingerprint=_dynamic_tools_fingerprint(),
         )
         update_kwargs: dict[str, Any] = {"thread_id": thread_id}
-        if stored_effort:
-            update_kwargs["effort"] = stored_effort
+        if start_effort:
+            update_kwargs["effort"] = start_effort
             if start_model:
                 update_kwargs["model"] = start_model
         personality = self._thread_setting(chat_id, workspace, "personality")

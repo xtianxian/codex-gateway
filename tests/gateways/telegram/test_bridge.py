@@ -806,6 +806,9 @@ def settings_for(
     root: Path | None = None,
     *,
     permission_profile: str | None = None,
+    pair_command_template: str | None = None,
+    model: str | None = None,
+    model_reasoning_effort: str | None = None,
 ) -> TelegramSettings:
     workspace_root = root or (tmp_path / "projects")
     workspace_root.mkdir(parents=True, exist_ok=True)
@@ -817,7 +820,8 @@ def settings_for(
         allowed_roots=(workspace_root.resolve(strict=False),),
         default_cwd=default_cwd.resolve(strict=False),
         app_server_command=("codex", "app-server", "--listen", "stdio://"),
-        model=None,
+        model=model,
+        model_reasoning_effort=model_reasoning_effort,
         sandbox="workspace-write",
         approval_policy="unlessTrusted",
         approval_timeout_seconds=900,
@@ -825,6 +829,7 @@ def settings_for(
         poll_timeout_seconds=30,
         permission_profile=permission_profile,
         allowed_user_id="123",
+        pair_command_template=pair_command_template,
     )
 
 
@@ -918,8 +923,17 @@ def bridge_for(
     *,
     now: datetime | None = None,
     permission_profile: str | None = None,
+    pair_command_template: str | None = None,
+    model: str | None = None,
+    model_reasoning_effort: str | None = None,
 ) -> tuple[TelegramBridge, FakeBot, FakeAppServer, TelegramStateStore, AccessManager]:
-    settings = settings_for(tmp_path, permission_profile=permission_profile)
+    settings = settings_for(
+        tmp_path,
+        permission_profile=permission_profile,
+        pair_command_template=pair_command_template,
+        model=model,
+        model_reasoning_effort=model_reasoning_effort,
+    )
     store = TelegramStateStore(settings.state_dir)
     access = AccessManager(
         store,
@@ -1372,6 +1386,27 @@ async def test_start_creates_pairing_command_for_configured_unpaired_user(tmp_pa
     assert pairing["chat_id"] == "42"
     assert app_server.thread_starts == []
     assert app_server.turn_starts == []
+
+
+@pytest.mark.asyncio
+async def test_start_uses_configured_pairing_command_template(tmp_path: Path) -> None:
+    bridge, bot, _app_server, _store, _access = bridge_for(
+        tmp_path,
+        pair_command_template=(
+            "docker compose -f testing\\docker\\compose.linux.yaml run --rm "
+            "codex-gateway-cli pair {code}"
+        ),
+    )
+
+    await bridge.handle_update(message_update("/start", user_id=123))
+
+    message = bot.messages[-1]["text"]
+    match = re.search(
+        r"docker compose -f testing\\docker\\compose\.linux\.yaml run --rm "
+        r"codex-gateway-cli pair ([A-Z0-9]{4}-[A-Z0-9]{4})",
+        message,
+    )
+    assert match is not None
 
 
 @pytest.mark.asyncio
@@ -1932,6 +1967,25 @@ async def test_saved_model_selection_applies_to_new_threads(tmp_path: Path) -> N
     assert app_server.thread_starts[-1]["model"] == "gpt-5.1"
     assert app_server.thread_settings_updates[-1] == {"thread_id": "thr_2", "effort": "high", "model": "gpt-5.1"}
     assert bot.messages[-1]["text"] == f"Started a new Codex thread for {bridge.settings.default_cwd}."
+
+
+@pytest.mark.asyncio
+async def test_setup_model_preference_applies_to_new_threads(tmp_path: Path) -> None:
+    bridge, _bot, app_server, _store, access = bridge_for(
+        tmp_path,
+        model="gpt-5.4-mini",
+        model_reasoning_effort="medium",
+    )
+    access.allow_user("123", username="xtian", source="cli")
+
+    await bridge.handle_update(message_update("start with configured model"))
+
+    assert app_server.thread_starts[-1]["model"] == "gpt-5.4-mini"
+    assert app_server.thread_settings_updates[-1] == {
+        "thread_id": "thr_1",
+        "effort": "medium",
+        "model": "gpt-5.4-mini",
+    }
 
 
 @pytest.mark.asyncio

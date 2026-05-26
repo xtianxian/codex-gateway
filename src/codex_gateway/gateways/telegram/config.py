@@ -33,12 +33,14 @@ class TelegramSettings:
     max_attachment_bytes: int
     poll_timeout_seconds: int
     permission_profile: str | None = None
+    model_reasoning_effort: str | None = None
     app_server_transport: str = DEFAULT_APP_SERVER_TRANSPORT
     app_server_url: str = DEFAULT_APP_SERVER_URL
     codex_bin: str = DEFAULT_CODEX_BIN
     enable_exec: bool = False
     advertise_exec: bool = False
     allowed_user_id: str | None = None
+    pair_command_template: str | None = None
 
 
 def get_telegram_settings() -> TelegramSettings:
@@ -69,6 +71,10 @@ def get_telegram_settings() -> TelegramSettings:
         default_cwd=default_cwd,
         app_server_command=tuple(shlex.split(command, posix=os.name != "nt")),
         model=_env_optional("CODEX_GATEWAY_TELEGRAM_MODEL", "CODEX_TELEGRAM_MODEL"),
+        model_reasoning_effort=_env_optional(
+            "CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT",
+            "CODEX_TELEGRAM_MODEL_REASONING_EFFORT",
+        ),
         permission_profile=_env_optional(
             "CODEX_GATEWAY_TELEGRAM_PERMISSION_PROFILE",
             "CODEX_TELEGRAM_PERMISSION_PROFILE",
@@ -88,6 +94,7 @@ def get_telegram_settings() -> TelegramSettings:
         enable_exec=_env_bool("CODEX_GATEWAY_ENABLE_EXEC", False),
         advertise_exec=_env_bool("CODEX_GATEWAY_ADVERTISE_EXEC", False),
         allowed_user_id=_telegram_allowed_user_id(),
+        pair_command_template=_env_optional("CODEX_GATEWAY_TELEGRAM_PAIR_COMMAND"),
     )
 
 

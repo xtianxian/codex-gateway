@@ -41,6 +41,8 @@ def _add_telegram_parser(subparsers: argparse._SubParsersAction[argparse.Argumen
     setup_parser.add_argument("--default-cwd")
     setup_parser.add_argument("--state-dir")
     setup_parser.add_argument("--permission-profile")
+    setup_parser.add_argument("--model")
+    setup_parser.add_argument("--reasoning-effort")
     setup_parser.add_argument("--env-file", default=".env")
     telegram_subparsers.add_parser("status")
 

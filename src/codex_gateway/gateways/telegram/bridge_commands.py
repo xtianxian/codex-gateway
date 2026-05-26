@@ -243,7 +243,7 @@ class TelegramBridgeCommandMixin:
             if code is None:
                 await self._send(chat_id, _unauthorized_user_text())
                 return
-            await self._send(chat_id, _pairing_guidance_text(code))
+            await self._send(chat_id, _pairing_guidance_text(code, self.settings.pair_command_template))
             return
         await self._send(chat_id, _start_pairing_text())
 
