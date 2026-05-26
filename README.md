@@ -96,11 +96,14 @@ files, and gateway state stay on the user's machine.
 
 ```powershell
 codex --version
+codex login status
 ```
 
 Codex authentication comes from your local `codex` CLI/app-server session. This
 gateway is for a Codex-capable ChatGPT account or subscription; it does not ask
-for or use an OpenAI API key such as `OPENAI_API_KEY` to run Codex.
+for or use an OpenAI API key such as `OPENAI_API_KEY` to run Codex. If
+`codex login status` shows you are not signed in, run `codex login` before
+starting the gateway.
 
 ## Compatibility
 
@@ -231,6 +234,8 @@ Use these blocks when you already know which operation you need.
 
 | Task | Command |
 | --- | --- |
+| Check Codex CLI | `codex --version` |
+| Sign in to Codex CLI | `codex login` |
 | Install dependencies | `uv sync --extra dev` |
 | Run tests | `uv run pytest` |
 | Configure Telegram | `uv run codex-gateway telegram setup` |
@@ -394,6 +399,18 @@ uv run codex-gateway telegram access status
 uv run codex-gateway telegram access pair <code>
 ```
 
+### Missing Codex CLI
+
+If PowerShell reports that `codex` is not recognized, install or update Codex
+CLI from the current
+[OpenAI Codex CLI instructions](https://help.openai.com/en/articles/11381614-api-codex-cli-and-sign-in-with-chatgpt),
+then open a new PowerShell and confirm the command is on `Path`:
+
+```powershell
+Get-Command codex
+codex --version
+```
+
 ### Codex Authentication
 
 The gateway uses your local Codex CLI/app-server session, not
@@ -402,6 +419,8 @@ starting the gateway:
 
 ```powershell
 codex --version
+codex login status
+codex login
 uv run codex-gateway telegram status
 ```
 
