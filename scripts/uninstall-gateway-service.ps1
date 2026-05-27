@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 function Get-ServiceRecord {
     param([string]$Name)
 
-    Get-CimInstance Win32_Service -Filter "Name='$Name'" -ErrorAction SilentlyContinue
+    Get-Service -Name $Name -ErrorAction SilentlyContinue
 }
 
 if ($env:CODEX_GATEWAY_TEST_SERVICE_UNINSTALL_LOG) {
@@ -24,16 +24,16 @@ if ($null -eq $service) {
     exit 0
 }
 
-if ($service.State -ne "Stopped") {
+if ($service.Status -ne "Stopped") {
     & sc.exe stop $ServiceName *> $null
 
     $deadline = (Get-Date).AddSeconds(30)
     do {
         Start-Sleep -Seconds 1
         $service = Get-ServiceRecord -Name $ServiceName
-    } while ($null -ne $service -and $service.State -ne "Stopped" -and (Get-Date) -lt $deadline)
+    } while ($null -ne $service -and $service.Status -ne "Stopped" -and (Get-Date) -lt $deadline)
 
-    if ($null -ne $service -and $service.State -ne "Stopped") {
+    if ($null -ne $service -and $service.Status -ne "Stopped") {
         throw "Timed out waiting for service '$ServiceName' to stop."
     }
 }

@@ -59,8 +59,15 @@ Run these steps in order.
 
 The setup service runs `telegram setup` in `/work`, writes the Docker-local
 `.env` into the `gateway-config` volume, prompts for Codex login reuse or
-login, prompts for workspace roots, prompts for the initial model preference,
-and prompts for the default permission profile.
+login, prompts for workspace roots, writes the default initial model
+preference, and prompts for the default permission profile. Use Telegram
+`/model` after pairing to switch models from the live app-server list.
+If the `codex-gateway` container is already running, restart it after rerunning
+setup so the updated Docker-local `.env` is applied:
+
+```powershell
+docker compose -f testing\docker\compose.linux.yaml restart codex-gateway
+```
 
 ## Pairing
 
@@ -186,8 +193,31 @@ Stop the Docker gateway:
 docker compose -f testing\docker\compose.linux.yaml down
 ```
 
-Remove Docker volumes only when you intentionally want to discard Codex auth,
-gateway config, Telegram state, workspace data, uv cache, and the Linux
+For a gateway-only Docker reset, use one of the full uninstall scripts and opt
+in to Docker gateway volume cleanup. This runs Compose `down` and removes only
+the Docker `gateway-config` and `gateway-state` volumes. It preserves
+`codex-home`, `gateway-workspace`, `linux-venv`, and `uv-cache`:
+
+```powershell
+.\scripts\uninstall-gateway.ps1 -DockerGatewayVolumes
+```
+
+```bash
+bash scripts/uninstall-gateway.sh --docker-gateway-volumes
+```
+
+Run the corresponding dry-run first when checking local paths:
+
+```powershell
+.\scripts\uninstall-gateway.ps1 -WhatIf -DockerGatewayVolumes
+```
+
+```bash
+bash scripts/uninstall-gateway.sh --dry-run --docker-gateway-volumes
+```
+
+Remove all Docker volumes only when you intentionally want to discard Codex
+auth, gateway config, Telegram state, workspace data, uv cache, and the Linux
 project environment:
 
 ```powershell

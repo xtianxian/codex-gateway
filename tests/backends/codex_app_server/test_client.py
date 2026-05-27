@@ -121,6 +121,51 @@ async def test_notifications_and_server_requests_are_dispatched() -> None:
 
 
 @pytest.mark.asyncio
+async def test_notification_handler_failure_does_not_stop_reader() -> None:
+    async def fail_notification(_event: AppServerEvent) -> None:
+        raise RuntimeError("telegram send timed out")
+
+    transport = FakeTransport()
+    client = AppServerClient(transport=transport, on_notification=fail_notification)
+    await client.start_reader()
+
+    await transport.incoming.put({"method": "item/completed", "params": {"turnId": "turn_1"}})
+    await asyncio.sleep(0)
+
+    pending = asyncio.create_task(client.request("thread/read", {"threadId": "thr_1"}))
+    await asyncio.sleep(0)
+    await transport.incoming.put({"id": 1, "result": {"thread": {"id": "thr_1"}}})
+
+    assert await asyncio.wait_for(pending, timeout=1) == {"thread": {"id": "thr_1"}}
+
+    await client.stop()
+
+
+@pytest.mark.asyncio
+async def test_server_request_handler_failure_sends_error_and_reader_continues() -> None:
+    async def fail_request(_event: AppServerEvent) -> None:
+        raise RuntimeError("request failed")
+
+    transport = FakeTransport()
+    client = AppServerClient(transport=transport, on_request=fail_request)
+    await client.start_reader()
+
+    await transport.incoming.put({"id": 99, "method": "item/tool/call", "params": {"turnId": "turn_1"}})
+    await asyncio.sleep(0)
+
+    assert transport.sent[0]["id"] == 99
+    assert transport.sent[0]["error"]["message"] == "request failed"
+
+    pending = asyncio.create_task(client.request("thread/read", {"threadId": "thr_1"}))
+    await asyncio.sleep(0)
+    await transport.incoming.put({"id": 1, "result": {"thread": {"id": "thr_1"}}})
+
+    assert await asyncio.wait_for(pending, timeout=1) == {"thread": {"id": "thr_1"}}
+
+    await client.stop()
+
+
+@pytest.mark.asyncio
 async def test_transport_close_fails_pending_requests() -> None:
     transport = FakeTransport()
     client = AppServerClient(transport=transport)
@@ -134,6 +179,19 @@ async def test_transport_close_fails_pending_requests() -> None:
         await pending
 
     await client.stop()
+
+
+@pytest.mark.asyncio
+async def test_transport_send_failure_is_wrapped_as_json_rpc_error() -> None:
+    class ClosedTransport(FakeTransport):
+        async def send(self, message: dict[str, Any]) -> None:
+            raise ConnectionError("closed")
+
+    transport = ClosedTransport()
+    client = AppServerClient(transport=transport)
+
+    with pytest.raises(JsonRpcError, match="App-server transport send failed: closed"):
+        await client.request("model/list", {})
 
 
 @pytest.mark.asyncio

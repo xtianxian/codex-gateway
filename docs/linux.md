@@ -79,6 +79,13 @@ Run these steps in order when setting up WSL2 Ubuntu from a Windows host.
    uv run codex-gateway telegram status
    ```
 
+If an existing Linux or WSL `codex-gateway.service` is already running, restart
+it after rerunning setup so the updated `.env` is applied:
+
+```bash
+sudo systemctl restart codex-gateway.service
+```
+
 Stop the Windows `CodexGateway` service before running a WSL foreground or
 system-service gateway with the same Telegram bot token, then restart the
 Windows service when the WSL run is stopped.
@@ -207,7 +214,7 @@ sudo systemctl restart codex-gateway.service
 
 ## Cleanup And Uninstall
 
-Stop the service:
+Stop the service only:
 
 ```bash
 sudo systemctl stop codex-gateway.service
@@ -218,4 +225,26 @@ token:
 
 ```bash
 sudo systemctl disable --now codex-gateway.service
+```
+
+Run a full gateway-only uninstall/reset when you want to remove local gateway
+configuration, state, logs, startup integration, and matching gateway processes
+while preserving workspaces and Codex CLI login/auth:
+
+```bash
+bash scripts/uninstall-gateway.sh --dry-run
+bash scripts/uninstall-gateway.sh
+```
+
+On Linux and WSL, the script disables/removes `codex-gateway.service` when it
+is present. It removes only gateway-owned paths, refuses dangerous targets such
+as workspace roots or profile directories, does not kill an arbitrary process
+just because it owns port `8765`, and does not revoke the Telegram bot token at
+BotFather.
+
+To also stop the Docker Compose gateway and remove only the Docker
+`gateway-config` and `gateway-state` volumes, opt in explicitly:
+
+```bash
+bash scripts/uninstall-gateway.sh --docker-gateway-volumes
 ```

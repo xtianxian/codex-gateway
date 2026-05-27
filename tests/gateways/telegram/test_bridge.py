@@ -1114,6 +1114,32 @@ async def test_ordinary_message_is_rejected_while_turn_is_active(tmp_path: Path)
     assert "/cancel" in bot.messages[-1]["text"]
 
 
+@pytest.mark.asyncio
+async def test_stale_active_turn_is_recovered_before_rejecting_message(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="gatewayuser", source="cli")
+
+    async def read_completed_thread(**kwargs: Any) -> dict[str, Any]:
+        app_server.thread_reads.append(kwargs)
+        return {
+            "thread": {
+                "id": kwargs["thread_id"],
+                "status": {"type": "idle"},
+                "turns": [{"id": "turn_1", "status": "completed", "items": []}],
+            }
+        }
+
+    app_server.thread_read = read_completed_thread
+
+    await bridge.handle_update(message_update("first turn"))
+    await bridge.handle_update(message_update("second turn", message_id=11))
+
+    assert bridge.turns["turn_1"].completed is True
+    assert len(app_server.turn_starts) == 2
+    assert app_server.turn_starts[-1]["input_items"] == [{"type": "text", "text": "second turn"}]
+    assert not any("A Codex turn is already active" in message["text"] for message in bot.messages)
+
+
 @pytest.mark.parametrize(
     "command_text",
     [
@@ -1329,6 +1355,21 @@ async def test_stale_thread_mapping_starts_replacement_thread_when_resume_fails(
     assert app_server.thread_starts[0]["cwd"] == str(bridge.settings.default_cwd)
     assert app_server.turn_starts[0]["thread_id"] == "thr_1"
     assert store.load_threads()[TelegramStateStore.thread_key(42, bridge.settings.default_cwd)]["thread_id"] == "thr_1"
+
+
+@pytest.mark.asyncio
+async def test_normal_message_app_server_failure_reports_without_crashing(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="gatewayuser", source="cli")
+
+    async def fail_turn_start(**_kwargs: Any) -> dict[str, Any]:
+        raise JsonRpcError("App-server transport send failed: closed")
+
+    app_server.turn_start = fail_turn_start
+
+    await bridge.handle_update(message_update("continue"))
+
+    assert bot.messages[-1]["text"] == "App-server command failed: App-server transport send failed: closed"
 
 
 @pytest.mark.asyncio
@@ -4572,6 +4613,41 @@ async def test_additional_media_tools_send_workspace_files_to_native_methods(
     for key, value in expected.items():
         assert sent[key] == value
     assert app_server.tool_results[-1]["content"][0]["text"].startswith("sent message_id=")
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_media_send_timeout_suppresses_exact_retry(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="gatewayuser", source="cli")
+    path = bridge.settings.default_cwd / "loop.gif"
+    path.write_bytes(b"gif bytes")
+    await bridge.handle_update(message_update("send media"))
+    calls = 0
+
+    async def timeout_send_animation(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        raise TelegramAPIError("Telegram API sendAnimation failed: ReadTimeout", ambiguous_delivery=True)
+
+    bot.send_animation = timeout_send_animation  # type: ignore[method-assign]
+    event = AppServerEvent(
+        "item/tool/call",
+        {
+            "turnId": "turn_1",
+            "tool": "telegram_send_animation",
+            "arguments": {"path": "loop.gif", "caption": "Funny GIF"},
+        },
+        request_id=188,
+    )
+
+    await bridge.handle_app_server_request(event)
+    await bridge.handle_app_server_request(
+        AppServerEvent(event.method, event.params, request_id=189)
+    )
+
+    assert calls == 1
+    assert "timed out after it was submitted" in app_server.tool_results[-2]["content"][0]["text"]
+    assert "Duplicate Telegram send suppressed" in app_server.tool_results[-1]["content"][0]["text"]
 
 
 @pytest.mark.asyncio

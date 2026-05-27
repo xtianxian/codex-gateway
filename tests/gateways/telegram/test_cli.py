@@ -165,7 +165,7 @@ def test_telegram_setup_writes_relative_env_without_pairing_code(monkeypatch, tm
     assert str(tmp_path) not in env_text
 
     output = capsys.readouterr().out
-    assert "Initial model preference: gpt-5.4-mini medium." in output
+    assert "Initial model preference: gpt-5.4-mini medium. Use Telegram /model to switch." in output
     assert "Default permission profile: Default." in output
     assert "Only the configured Telegram user can send /start to get the pairing command." in output
     assert re.search(r"/start [A-Z0-9]{4}-[A-Z0-9]{4}", output) is None
@@ -245,10 +245,8 @@ def test_telegram_setup_prints_token_and_workspace_guidance(monkeypatch, tmp_pat
         "Telegram bot token: ",
         "Telegram user ID: ",
         "Workspace root(s) [workspace]: ",
-        "Initial model [gpt-5.4-mini medium]: ",
         "Select profile [2 Default]: ",
     ]
-    assert "Initial Model" in output
     assert "Default Permission Profile" in output
 
 
@@ -513,7 +511,6 @@ def test_telegram_setup_formats_existing_env_prompts(
         "Telegram bot token [existing token found; Enter keeps it]: ",
         "Telegram user ID [existing 123; Enter keeps it]: ",
         "Workspace root(s) [existing .; Enter keeps it]: ",
-        "Initial model [gpt-5.4-mini medium]: ",
         "Select profile [existing 4 Full Access; Enter keeps it]: ",
     ]
 

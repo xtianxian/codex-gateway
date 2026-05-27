@@ -177,6 +177,35 @@ internal sealed class CodexGatewayService : ServiceBase
 
     private void StopExistingGatewayRuns()
     {
+        Exception failure = null;
+        var cleanup = new Thread(() =>
+        {
+            try
+            {
+                StopExistingGatewayRunsCore();
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+        });
+        cleanup.IsBackground = true;
+        cleanup.Start();
+
+        if (!cleanup.Join(TimeSpan.FromSeconds(5)))
+        {
+            Log("Skipped stale gateway process cleanup because process enumeration did not finish within 5 seconds.");
+            return;
+        }
+
+        if (failure != null)
+        {
+            Log("Failed to stop stale gateway processes: " + failure.Message);
+        }
+    }
+
+    private void StopExistingGatewayRunsCore()
+    {
         try
         {
             var allProcesses = LoadProcesses();
@@ -209,7 +238,7 @@ internal sealed class CodexGatewayService : ServiceBase
         }
         catch (Exception ex)
         {
-            Log("Failed to stop stale gateway processes: " + ex.Message);
+            throw new InvalidOperationException(ex.Message, ex);
         }
     }
 
@@ -294,8 +323,22 @@ internal sealed class CodexGatewayService : ServiceBase
             {
                 if (killer != null)
                 {
-                    killer.WaitForExit(10000);
+                    if (!killer.WaitForExit(5000))
+                    {
+                        try
+                        {
+                            killer.Kill();
+                        }
+                        catch
+                        {
+                        }
+                    }
                 }
+            }
+
+            if (!process.HasExited)
+            {
+                process.Kill();
             }
         }
         catch (Exception ex)

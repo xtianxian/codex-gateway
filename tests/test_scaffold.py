@@ -74,6 +74,7 @@ def test_readme_documents_kofi_support_link() -> None:
 def test_macos_setup_scripts_are_documented() -> None:
     readme = Path("README.md").read_text(encoding="utf-8")
     macos_doc = Path("docs/macos.md").read_text(encoding="utf-8")
+    macos_setup = Path("scripts/setup-macos.sh").read_text(encoding="utf-8")
 
     for script in [
         Path("scripts/setup-macos.sh"),
@@ -85,6 +86,8 @@ def test_macos_setup_scripts_are_documented() -> None:
 
     assert "bash scripts/setup-macos.sh" in readme
     assert "bash scripts/install-macos-launchd.sh --start" in macos_doc
+    assert "Update and restart existing Codex Gateway launchd user service to apply current .env" in macos_setup
+    assert "Existing launchd service was not restarted. Run this to apply .env changes:" in macos_setup
 
 
 def test_environment_docs_include_repo_checkout_steps() -> None:
@@ -122,4 +125,41 @@ def test_docker_setup_supports_codex_access_token_auth() -> None:
     assert "codex login --with-access-token" in wrapper
     assert "codex login --device-auth" in wrapper
     assert "CODEX_ACCESS_TOKEN: ${CODEX_ACCESS_TOKEN:-}" in compose
+
+
+def test_environment_docs_explain_restart_after_setup_for_background_runtimes() -> None:
+    def single_line(path: str) -> str:
+        return " ".join(Path(path).read_text(encoding="utf-8").split())
+
+    assert "update and restart it so the current `.env` is applied" in single_line("docs/windows.md")
+    assert "update and restart it so the current `.env` is applied" in single_line("docs/macos.md")
+    assert "restart it after rerunning setup so the updated Docker-local `.env` is applied" in single_line(
+        "docs/docker.md"
+    )
+    assert "restart it after rerunning setup so the updated `.env` is applied" in single_line("docs/linux.md")
+
+
+def test_full_gateway_uninstall_scripts_are_documented() -> None:
+    for script in [
+        Path("scripts/uninstall-gateway.ps1"),
+        Path("scripts/uninstall-gateway.sh"),
+    ]:
+        assert script.is_file()
+
+    docs = "\n".join(
+        Path(path).read_text(encoding="utf-8")
+        for path in [
+            "README.md",
+            "docs/windows.md",
+            "docs/macos.md",
+            "docs/linux.md",
+            "docs/docker.md",
+            "RUNBOOK.md",
+        ]
+    )
+
+    assert ".\\scripts\\uninstall-gateway.ps1" in docs
+    assert "bash scripts/uninstall-gateway.sh" in docs
+    assert "-DockerGatewayVolumes" in docs
+    assert "--docker-gateway-volumes" in docs
 

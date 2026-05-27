@@ -23,6 +23,7 @@ class TurnContext:
     plan_selection_group_id: str | None = None
     attachments: dict[str, dict[str, Any]] = field(default_factory=dict)
     output_attachments_sent: set[str] = field(default_factory=set)
+    ambiguous_tool_sends: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)

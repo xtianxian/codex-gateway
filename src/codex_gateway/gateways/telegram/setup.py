@@ -26,11 +26,6 @@ WORKSPACE_HELP = (
     "Use one directory, or multiple directories separated by semicolon or comma.\n"
     "Example: C:\\codex-workspace"
 )
-MODEL_HELP = (
-    "Initial model preference is used when a new Telegram thread starts before "
-    "the chat has chosen a model with /model.\n"
-    "Enter a model name, optionally followed by reasoning effort."
-)
 CODEX_ACCESS_TOKEN_HELP_LINES = (
     "CODEX_ACCESS_TOKEN is set; secondary token login uses `codex login --with-access-token`.",
     "ChatGPT device auth remains the default.",
@@ -191,7 +186,6 @@ def run_telegram_setup(args: Any) -> None:
         getattr(args, "reasoning_effort", None),
         default_model=existing_model,
         default_effort=existing_effort,
-        use_default_without_prompt=targeted_update,
     )
     state_dir = str(args.state_dir or existing_state_dir or SETUP_STATE_DIR_DEFAULT).strip()
     permission_choice = _permission_profile_prompt(
@@ -230,7 +224,7 @@ def run_telegram_setup(args: Any) -> None:
     print()
     print("Setup Complete")
     print(f"  Telegram gateway setup written to {env_display}.")
-    print(f"  Initial model preference: {model} {model_effort}.")
+    print(f"  Initial model preference: {model} {model_effort}. Use Telegram /model to switch.")
     print(f"  Default permission profile: {permission_choice.label}.")
     print("  Workspace roots can contain multiple directories separated by semicolon or comma.")
     print("  Telegram /setcwd persists per chat until /setcwd, /workspace set, or /reset changes it.")
@@ -409,7 +403,6 @@ def _initial_model_values(
     *,
     default_model: str | None = None,
     default_effort: str | None = None,
-    use_default_without_prompt: bool = False,
 ) -> tuple[str, str]:
     resolved_default_model = default_model or SETUP_MODEL_DEFAULT
     resolved_default_effort = _reasoning_effort_value(default_effort) or SETUP_REASONING_EFFORT_DEFAULT
@@ -420,22 +413,7 @@ def _initial_model_values(
             if effort_value is None:
                 raise SystemExit("Use --reasoning-effort <none|minimal|low|medium|high|xhigh>.")
         return model_value or resolved_default_model, effort_value or resolved_default_effort
-    if use_default_without_prompt:
-        return resolved_default_model, resolved_default_effort
-
-    default_label = f"{resolved_default_model} {resolved_default_effort}"
-    if default_model or default_effort:
-        default_label = f"existing {default_label}; Enter keeps it"
-    value = _prompt(
-        "Initial model",
-        None,
-        f"{resolved_default_model} {resolved_default_effort}",
-        default_label=default_label,
-        help_text=MODEL_HELP,
-        help_title="Initial Model",
-    )
-    model_value, effort_value = _split_model_preference(value)
-    return model_value or resolved_default_model, effort_value or resolved_default_effort
+    return resolved_default_model, resolved_default_effort
 
 
 def _split_model_preference(value: str) -> tuple[str, str | None]:

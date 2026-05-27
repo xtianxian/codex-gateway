@@ -38,6 +38,23 @@ async def test_httpx_timeout_error_names_exception_when_message_is_empty() -> No
         await api.get_updates(timeout=30)
 
     assert "ReadTimeout" in str(exc_info.value)
+    assert exc_info.value.ambiguous_delivery is False
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_multipart_send_read_timeout_marks_delivery_ambiguous() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.telegram.org")
+    api = TelegramBotAPI("test-token", client=client)
+
+    with pytest.raises(TelegramAPIError) as exc_info:
+        await api.send_animation(42, b"gif", filename="loop.gif", caption="Loop")
+
+    assert "ReadTimeout" in str(exc_info.value)
+    assert exc_info.value.ambiguous_delivery is True
     await client.aclose()
 
 

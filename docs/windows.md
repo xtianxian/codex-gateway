@@ -95,8 +95,11 @@ uv run codex-gateway telegram run
 sets the one Telegram user ID allowed to request pairing. It checks that the
 configured Codex CLI is installed and reports whether `codex login status` is
 already signed in. You can rerun setup later; pressing Enter keeps existing
-token, user ID, workspace roots, default workspace, initial model preference,
-and default permission profile values.
+token, user ID, workspace roots, default workspace, and default permission
+profile values. Setup silently keeps or writes the initial default model; use
+Telegram `/model` after pairing to switch models. If the `CodexGateway`
+Windows Service already exists, setup asks whether to update and restart it so
+the current `.env` is applied.
 
 ## Service Install, Start, Restart
 
@@ -243,7 +246,7 @@ Restart-Service CodexGateway
 
 ## Cleanup And Uninstall
 
-Remove startup integration:
+Remove startup integration only:
 
 ```powershell
 .\scripts\setup.ps1 -RemoveStartup
@@ -253,4 +256,28 @@ Remove the service directly:
 
 ```powershell
 .\scripts\uninstall-gateway-service.ps1
+```
+
+Run a full gateway-only uninstall/reset when you want to remove local gateway
+configuration, state, logs, startup integration, and matching gateway processes
+while preserving workspaces and Codex CLI login/auth:
+
+```powershell
+.\scripts\uninstall-gateway.ps1 -WhatIf
+.\scripts\uninstall-gateway.ps1
+```
+
+If the `CodexGateway` service exists, run the full uninstall from an elevated
+PowerShell. The script removes only gateway-owned paths, refuses dangerous
+targets such as workspace roots or profile directories, does not kill an
+arbitrary process just because it owns port `8765`, and does not revoke the
+Telegram bot token at BotFather. Windows setup and uninstall manage only the
+supported `CodexGateway` Windows Service; they do not remove startup artifacts
+they did not create.
+
+To also stop the Docker Compose gateway and remove only the Docker
+`gateway-config` and `gateway-state` volumes, opt in explicitly:
+
+```powershell
+.\scripts\uninstall-gateway.ps1 -DockerGatewayVolumes
 ```

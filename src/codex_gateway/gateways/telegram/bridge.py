@@ -298,7 +298,8 @@ class TelegramBridge(
         ):
             return
 
-        if self._active_turn_context(chat_id) is not None and _command_disabled_during_active_turn(command):
+        active_context = await self._active_turn_context_or_recover(chat_id)
+        if active_context is not None and _command_disabled_during_active_turn(command):
             await self._send_active_task_disabled_message(chat_id, command.name or "")
             return
 
@@ -336,7 +337,7 @@ class TelegramBridge(
                 if command.name == "plan":
                     if await self._handle_plan_turn_command(chat_id, user_id, command, _message_id(message)):
                         return
-                if self._active_turn_context(chat_id) is not None:
+                if active_context is not None:
                     await self._send_active_turn_wait_message(chat_id)
                     return
                 await self._start_turn(
@@ -356,20 +357,23 @@ class TelegramBridge(
             await self._send(chat_id, f"Unknown command: /{command.name}")
             return
 
-        if self._active_turn_context(chat_id) is not None:
+        if active_context is not None:
             await self._send_active_turn_wait_message(chat_id)
             return
         attachments = await self._download_message_attachments(chat_id, message)
         if attachments is None:
             return
         turn_text = _message_text_with_payload_summary(text, message)
-        await self._start_turn(
-            chat_id=chat_id,
-            user_id=user_id,
-            message_id=_message_id(message),
-            text=turn_text,
-            attachments=attachments,
-        )
+        try:
+            await self._start_turn(
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=_message_id(message),
+                text=turn_text,
+                attachments=attachments,
+            )
+        except JsonRpcError as exc:
+            await self._send(chat_id, f"App-server command failed: {exc}")
 
     async def handle_app_event(self, event: AppServerEvent) -> None:
         if event.method == "thread/tokenUsage/updated":
@@ -543,7 +547,7 @@ class TelegramBridge(
             return "Plan is no longer available."
         if action == "plan_stay":
             return "Staying in Plan mode. Send feedback or a revised request."
-        if self._active_turn_context(chat_id) is not None:
+        if await self._active_turn_context_or_recover(chat_id) is not None:
             return "The planning turn is still running. Wait for it to finish, then choose again."
         if action == "plan_implement":
             mode_error = await self._switch_to_default_mode(chat_id, workspace)

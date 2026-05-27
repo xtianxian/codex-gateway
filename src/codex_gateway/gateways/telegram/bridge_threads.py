@@ -455,7 +455,7 @@ class TelegramBridgeThreadMixin:
         if agents is not None:
             await self._send(chat_id, f"Project instructions already exist: {agents}")
             return True
-        if self._active_turn_context(chat_id) is not None:
+        if await self._active_turn_context_or_recover(chat_id) is not None:
             await self._send_active_turn_wait_message(chat_id)
             return True
         await self._start_turn(
@@ -480,7 +480,7 @@ class TelegramBridgeThreadMixin:
         if not command.args:
             await self._send(chat_id, message)
             return True
-        if self._active_turn_context(chat_id) is not None:
+        if await self._active_turn_context_or_recover(chat_id) is not None:
             await self._send_active_turn_wait_message(chat_id)
             return True
         await self._send(chat_id, message)
@@ -872,6 +872,43 @@ class TelegramBridgeThreadMixin:
         return context
 
 
+    async def _active_turn_context_or_recover(self, chat_id: str) -> TurnContext | None:
+        context = self._active_turn_context(chat_id)
+        if context is None:
+            return None
+        if await self._recover_completed_active_turn_context(context):
+            return None
+        return context
+
+
+    async def _recover_completed_active_turn_context(self, context: TurnContext) -> bool:
+        if not hasattr(self.app_server, "thread_read"):
+            return False
+        try:
+            result = await self.app_server.thread_read(thread_id=context.thread_id, include_turns=True)
+        except Exception as exc:
+            LOGGER.debug("Failed to verify active turn %s: %s", context.turn_id, exc)
+            return False
+        thread = result.get("thread") if isinstance(result, dict) else {}
+        if not isinstance(thread, dict):
+            return False
+        for turn in thread.get("turns") or []:
+            if isinstance(turn, dict) and str(turn.get("id") or "") == context.turn_id:
+                if _turn_record_is_terminal(turn):
+                    self._mark_turn_context_completed(context)
+                    return True
+                return False
+        if _thread_record_is_idle(thread):
+            self._mark_turn_context_completed(context)
+            return True
+        return False
+
+
+    def _mark_turn_context_completed(self, context: TurnContext) -> None:
+        context.completed = True
+        self._stop_typing_indicator(context.turn_id)
+
+
     async def _default_model_setting(self) -> str | None:
         if self.settings.model:
             return self.settings.model
@@ -1138,3 +1175,20 @@ class TelegramBridgeThreadMixin:
             mime_type=_attachment_mime_type(attachment, filename, file_path),
             size_bytes=len(data),
         )
+
+
+def _turn_record_is_terminal(turn: dict[str, Any]) -> bool:
+    status = str(turn.get("status") or "").lower()
+    if status in {"completed", "failed", "interrupted", "cancelled", "canceled"}:
+        return True
+    return turn.get("completedAt") is not None
+
+
+def _thread_record_is_idle(thread: dict[str, Any]) -> bool:
+    status = thread.get("status")
+    if isinstance(status, dict):
+        if str(status.get("type") or "").lower() != "idle":
+            return False
+    elif str(status or "").lower() != "idle":
+        return False
+    return not thread.get("activeTurnId")

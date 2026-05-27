@@ -62,7 +62,9 @@ bash scripts/setup-macos.sh
 ```
 
 That command syncs dependencies, runs tests, and offers to configure Telegram.
-It also offers to install and start the optional launchd user service.
+It also offers to install and start the optional launchd user service. If the
+launchd service already exists, setup asks whether to update and restart it so
+the current `.env` is applied.
 
 If you want foreground-only testing without installing launchd, run this
 instead:
@@ -248,7 +250,7 @@ launchctl kickstart -k "gui/$(id -u)/com.codex.gateway.telegram"
 
 ## Cleanup And Uninstall
 
-Remove startup integration:
+Remove startup integration only:
 
 ```bash
 bash scripts/setup-macos.sh --remove-startup
@@ -258,4 +260,25 @@ Remove the launchd service directly:
 
 ```bash
 bash scripts/uninstall-macos-launchd.sh
+```
+
+Run a full gateway-only uninstall/reset when you want to remove local gateway
+configuration, state, logs, startup integration, and matching gateway processes
+while preserving workspaces and Codex CLI login/auth:
+
+```bash
+bash scripts/uninstall-gateway.sh --dry-run
+bash scripts/uninstall-gateway.sh
+```
+
+The script removes only gateway-owned paths, refuses dangerous targets such as
+workspace roots or profile directories, does not kill an arbitrary process just
+because it owns port `8765`, and does not revoke the Telegram bot token at
+BotFather.
+
+To also stop the Docker Compose gateway and remove only the Docker
+`gateway-config` and `gateway-state` volumes, opt in explicitly:
+
+```bash
+bash scripts/uninstall-gateway.sh --docker-gateway-volumes
 ```

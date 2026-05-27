@@ -6,7 +6,12 @@ from typing import Any
 
 import pytest
 
-from codex_gateway.backends.codex_app_server.lifecycle import AppServerProcessManager, _fixed_loopback_port
+from codex_gateway.backends.codex_app_server.lifecycle import (
+    AppServerProcessManager,
+    _fixed_loopback_port,
+    _is_matching_app_server_command_line,
+    _netstat_listening_pids,
+)
 
 
 class FakeProcess:
@@ -127,6 +132,36 @@ async def test_process_manager_cleans_fixed_loopback_port_before_starting() -> N
 
 
 @pytest.mark.asyncio
+async def test_process_manager_skips_hung_fixed_port_cleanup() -> None:
+    process = FakeProcess()
+    events: list[str] = []
+
+    async def process_factory(*_command: str, **_kwargs: Any) -> FakeProcess:
+        events.append("start")
+        return process
+
+    async def ready_checker(_url: str) -> bool:
+        return True
+
+    async def port_cleanup(url: str) -> None:
+        events.append(f"cleanup:{url}")
+        await asyncio.sleep(10)
+
+    manager = AppServerProcessManager(
+        codex_bin="codex",
+        url="ws://127.0.0.1:8765",
+        process_factory=process_factory,
+        ready_checker=ready_checker,
+        port_cleanup=port_cleanup,
+        cleanup_timeout_seconds=0.01,
+    )
+
+    await manager.start()
+
+    assert events == ["cleanup:ws://127.0.0.1:8765", "start"]
+
+
+@pytest.mark.asyncio
 async def test_process_manager_skips_port_cleanup_for_ephemeral_port() -> None:
     process = FakeProcess()
     cleanup_urls: list[str] = []
@@ -158,6 +193,30 @@ def test_fixed_loopback_port_requires_nonzero_loopback_port() -> None:
     assert _fixed_loopback_port("ws://localhost:8765") == 8765
     assert _fixed_loopback_port("ws://127.0.0.1:0") is None
     assert _fixed_loopback_port("ws://192.0.2.1:8765") is None
+
+
+def test_windows_netstat_parser_finds_only_requested_listening_port() -> None:
+    output = """
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    127.0.0.1:8765         0.0.0.0:0              LISTENING       111
+  TCP    127.0.0.1:87650        0.0.0.0:0              LISTENING       222
+  TCP    [::1]:8765             [::]:0                 LISTENING       333
+  TCP    127.0.0.1:8765         127.0.0.1:50000        ESTABLISHED     444
+"""
+
+    assert _netstat_listening_pids(output, 8765) == [111, 333]
+
+
+def test_app_server_cleanup_command_line_match_is_narrow() -> None:
+    assert _is_matching_app_server_command_line(
+        r'"C:\Users\xtian\AppData\Roaming\npm\codex.cmd" app-server --listen ws://127.0.0.1:8765',
+        8765,
+    )
+    assert not _is_matching_app_server_command_line("codex login", 8765)
+    assert not _is_matching_app_server_command_line(
+        r"codex app-server --listen ws://127.0.0.1:87650",
+        8765,
+    )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows .cmd shim resolution is Windows-only.")

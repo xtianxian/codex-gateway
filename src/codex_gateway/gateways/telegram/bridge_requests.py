@@ -200,6 +200,29 @@ _STRUCTURED_SEND_TOOLS = {
     "telegram_send_checklist",
     "telegram_send_dice",
 }
+_CURRENT_MESSAGE_REUSE_TOOLS = {"telegram_copy_current_message", "telegram_forward_current_message"}
+_OUTBOUND_SEND_TIMEOUT_TEXT = (
+    "Telegram send request timed out after it was submitted. Delivery status is unknown, and Telegram may "
+    "already have delivered it. Do not retry this same send automatically; ask the user before retrying."
+)
+_DUPLICATE_OUTBOUND_SEND_TEXT = (
+    "Duplicate Telegram send suppressed because an earlier identical send timed out after submission. "
+    "Delivery status is unknown, and Telegram may already have delivered it. Ask the user before retrying."
+)
+
+
+def _outbound_send_fingerprint(tool: str, arguments: dict[str, Any]) -> str | None:
+    if (
+        tool != "telegram_reply"
+        and tool not in _FILE_SEND_TOOLS
+        and tool != "telegram_send_live_photo"
+        and tool != "telegram_send_media_group"
+        and tool != "telegram_send_paid_media"
+        and tool not in _STRUCTURED_SEND_TOOLS
+        and tool not in _CURRENT_MESSAGE_REUSE_TOOLS
+    ):
+        return None
+    return json.dumps({"tool": tool, "arguments": arguments}, sort_keys=True, default=str, separators=(",", ":"))
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -829,9 +852,19 @@ class TelegramBridgeRequestMixin:
             return
         tool = _tool_name(str(event.params.get("tool") or event.params.get("name") or ""))
         arguments = _tool_arguments(event.params.get("arguments"))
+        send_fingerprint = _outbound_send_fingerprint(tool, arguments)
+        if send_fingerprint and send_fingerprint in context.ambiguous_tool_sends:
+            context.tool_replied = True
+            await self._send_tool_text(event.request_id, _DUPLICATE_OUTBOUND_SEND_TEXT)
+            return
         try:
             handled = await self._handle_telegram_tool(event.request_id, context, tool, arguments)
         except TelegramAPIError as exc:
+            if send_fingerprint and exc.ambiguous_delivery:
+                context.ambiguous_tool_sends.add(send_fingerprint)
+                context.tool_replied = True
+                await self._send_tool_text(event.request_id, _OUTBOUND_SEND_TIMEOUT_TEXT)
+                return
             await self._send_tool_text(event.request_id, f"Telegram API error: {exc}")
             return
         except Exception as exc:
@@ -899,7 +932,7 @@ class TelegramBridgeRequestMixin:
         if tool in _STRUCTURED_SEND_TOOLS:
             await self._handle_structured_send_tool(request_id, context, tool, arguments)
             return True
-        if tool in {"telegram_copy_current_message", "telegram_forward_current_message"}:
+        if tool in _CURRENT_MESSAGE_REUSE_TOOLS:
             await self._handle_current_message_reuse_tool(request_id, context, tool, arguments)
             return True
         if tool == "telegram_download_attachment":
@@ -911,7 +944,6 @@ class TelegramBridgeRequestMixin:
             await self._send_tool_text(request_id, json.dumps(attachment, sort_keys=True))
             return True
         return False
-
 
     async def _send_tool_text(self, request_id: int | str, text: str) -> None:
         await self.app_server.send_dynamic_tool_result(request_id, [{"type": "text", "text": text}])

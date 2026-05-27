@@ -43,7 +43,38 @@ function Join-PathValue {
 function Get-ServiceRecord {
     param([string]$Name)
 
-    Get-CimInstance Win32_Service -Filter "Name='$Name'" -ErrorAction SilentlyContinue
+    Get-Service -Name $Name -ErrorAction SilentlyContinue
+}
+
+function Get-WindowsDirectory {
+    $windowsDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+    if ([string]::IsNullOrWhiteSpace($windowsDirectory)) {
+        $windowsDirectory = $env:WINDIR
+    }
+    if ([string]::IsNullOrWhiteSpace($windowsDirectory)) {
+        $windowsDirectory = $env:SystemRoot
+    }
+    if ([string]::IsNullOrWhiteSpace($windowsDirectory)) {
+        throw "Unable to resolve the Windows directory from the current environment."
+    }
+
+    return $windowsDirectory
+}
+
+function Resolve-CSharpCompiler {
+    $windowsDirectory = Get-WindowsDirectory
+    $candidates = @(
+        (Join-Path $windowsDirectory "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
+        (Join-Path $windowsDirectory "Microsoft.NET\Framework\v4.0.30319\csc.exe")
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "C# compiler not found. Checked: $($candidates -join '; ')."
 }
 
 function Stop-AndDeleteService {
@@ -54,16 +85,16 @@ function Stop-AndDeleteService {
         return
     }
 
-    if ($service.State -ne "Stopped") {
+    if ($service.Status -ne "Stopped") {
         & sc.exe stop $Name *> $null
 
         $deadline = (Get-Date).AddSeconds(30)
         do {
             Start-Sleep -Seconds 1
             $service = Get-ServiceRecord -Name $Name
-        } while ($null -ne $service -and $service.State -ne "Stopped" -and (Get-Date) -lt $deadline)
+        } while ($null -ne $service -and $service.Status -ne "Stopped" -and (Get-Date) -lt $deadline)
 
-        if ($null -ne $service -and $service.State -ne "Stopped") {
+        if ($null -ne $service -and $service.Status -ne "Stopped") {
             throw "Timed out waiting for service '$Name' to stop."
         }
     }
@@ -106,80 +137,6 @@ function Move-ServiceBinary {
     }
 }
 
-function Get-CurrentProcessChainIds {
-    $ids = New-Object 'System.Collections.Generic.HashSet[int]'
-    $processId = $PID
-    while ($processId -gt 0) {
-        if (-not $ids.Add([int]$processId)) {
-            break
-        }
-        $process = Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
-        if ($null -eq $process) {
-            break
-        }
-        $processId = [int]$process.ParentProcessId
-    }
-    return $ids
-}
-
-function Add-DescendantProcessIds {
-    param(
-        [Parameter(Mandatory = $true)]
-        [object[]]$Processes,
-        [Parameter(Mandatory = $true)]
-        [int]$ProcessId,
-        [Parameter(Mandatory = $true)]
-        [System.Collections.Generic.HashSet[int]]$TargetIds,
-        [Parameter(Mandatory = $true)]
-        [System.Collections.Generic.HashSet[int]]$ExcludedIds
-    )
-
-    foreach ($child in $Processes | Where-Object { [int]$_.ParentProcessId -eq $ProcessId }) {
-        $childId = [int]$child.ProcessId
-        if ($ExcludedIds.Contains($childId)) {
-            continue
-        }
-        if ($TargetIds.Add($childId)) {
-            Add-DescendantProcessIds -Processes $Processes -ProcessId $childId -TargetIds $TargetIds -ExcludedIds $ExcludedIds
-        }
-    }
-}
-
-function Stop-ExistingGatewayRuns {
-    param([string]$ProjectRoot)
-
-    $allProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
-    $currentChainIds = Get-CurrentProcessChainIds
-    $targetIds = New-Object 'System.Collections.Generic.HashSet[int]'
-    $escapedProjectRoot = [regex]::Escape($ProjectRoot)
-
-    foreach ($process in $allProcesses) {
-        $processId = [int]$process.ProcessId
-        if ($currentChainIds.Contains($processId)) {
-            continue
-        }
-
-        $commandLine = [string]$process.CommandLine
-        if (-not $commandLine) {
-            continue
-        }
-
-        $isThisGateway =
-            $commandLine -match $escapedProjectRoot -and (
-                $commandLine -match "start-gateway\.(ps1|vbs)" -or
-                ($commandLine -match "codex-gateway(\.exe)?" -and $commandLine -match "telegram run")
-            )
-
-        if ($isThisGateway -and $targetIds.Add($processId)) {
-            Add-DescendantProcessIds -Processes $allProcesses -ProcessId $processId -TargetIds $targetIds -ExcludedIds $currentChainIds
-        }
-    }
-
-    foreach ($targetId in $targetIds) {
-        Stop-Process -Id $targetId -Force -ErrorAction SilentlyContinue
-    }
-}
-
 if ($env:CODEX_GATEWAY_TEST_SERVICE_INSTALL_LOG) {
     "install ServiceName=$ServiceName DisplayName=$DisplayName Start=$Start" |
         Out-File -FilePath $env:CODEX_GATEWAY_TEST_SERVICE_INSTALL_LOG -Encoding utf8 -Append
@@ -191,13 +148,11 @@ $repoRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
 $source = Join-Path $scriptDir "CodexGatewayService.cs"
 $serviceDir = Join-Path $repoRoot ".codex-gateway\service"
 $serviceExe = Join-Path $serviceDir "CodexGatewayService.exe"
-$csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-
-if (-not (Test-Path -LiteralPath $csc)) {
-    throw "C# compiler not found at $csc."
-}
+$csc = Resolve-CSharpCompiler
 
 New-Item -ItemType Directory -Force -Path $serviceDir | Out-Null
+Get-ChildItem -Path $serviceDir -Filter "CodexGatewayService.build.*.exe" -File -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 
 $isAdministrator = Test-IsAdministrator
 $buildExe = Join-Path $serviceDir ("CodexGatewayService.build.{0}.exe" -f ([Guid]::NewGuid().ToString("N")))
@@ -221,7 +176,6 @@ if (-not $isAdministrator) {
 
 Stop-AndDeleteService -Name $ServiceName
 Move-ServiceBinary -Source $buildExe -Destination $serviceExe
-Stop-ExistingGatewayRuns -ProjectRoot $repoRoot
 
 & sc.exe create $ServiceName binPath= "`"$serviceExe`"" start= auto DisplayName= $DisplayName | Out-Null
 & sc.exe config $ServiceName start= delayed-auto | Out-Null
@@ -273,7 +227,7 @@ if ($Start) {
     & sc.exe start $ServiceName | Out-Null
 }
 
-Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" |
-    Select-Object Name,DisplayName,State,StartMode,PathName
+Get-Service -Name $ServiceName |
+    Select-Object Name,DisplayName,Status,StartType
 
 Write-Host "Service environment configured for PATH, user profile, app data, and Codex home."

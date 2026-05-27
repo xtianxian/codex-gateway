@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import os
+import re
 import shutil
 import socket
 from typing import Any, Awaitable, Callable
@@ -29,6 +31,7 @@ class AppServerProcessManager:
         app_server_args: tuple[str, ...] = (),
         poll_interval_seconds: float = 0.1,
         ready_timeout_seconds: float = 10,
+        cleanup_timeout_seconds: float = 8,
     ) -> None:
         self.codex_bin = codex_bin
         self.url = _resolve_free_port(url)
@@ -42,11 +45,12 @@ class AppServerProcessManager:
         self.cleanup_port_on_start = _fixed_loopback_port(url) is not None
         self.poll_interval_seconds = poll_interval_seconds
         self.ready_timeout_seconds = ready_timeout_seconds
+        self.cleanup_timeout_seconds = cleanup_timeout_seconds
         self.process: Any | None = None
 
     async def start(self) -> None:
         if self.cleanup_port_on_start:
-            await self.port_cleanup(self.url)
+            await self._cleanup_port()
         self.process = await self.process_factory(
             self.codex_bin,
             "app-server",
@@ -58,6 +62,12 @@ class AppServerProcessManager:
             stderr=asyncio.subprocess.DEVNULL,
         )
         await self._wait_ready()
+
+    async def _cleanup_port(self) -> None:
+        try:
+            await asyncio.wait_for(self.port_cleanup(self.url), timeout=self.cleanup_timeout_seconds)
+        except TimeoutError:
+            return
 
     async def stop(self) -> None:
         process = self.process
@@ -206,109 +216,98 @@ async def _cleanup_stale_app_server(url: str) -> None:
     port = _fixed_loopback_port(url)
     if port is None:
         return
-    powershell = _resolve_powershell()
-    if powershell is None:
-        return
-
-    process = await asyncio.create_subprocess_exec(
-        powershell,
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        _windows_stale_app_server_cleanup_script(port),
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    try:
-        await asyncio.wait_for(process.wait(), timeout=8)
-    except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
+    for pid in await _windows_listening_pids(port):
+        command_line = _windows_process_command_line(pid)
+        if not _is_matching_app_server_command_line(command_line, port):
+            continue
+        terminator = _terminate_windows_process_tree
+        await terminator(pid)
 
 
 def _resolve_powershell() -> str | None:
     return shutil.which("pwsh") or shutil.which("powershell")
 
 
-def _windows_stale_app_server_cleanup_script(port: int) -> str:
-    return rf"""
-$PortNumber = {port}
-$PortPattern = ":{port}(?!\d)"
-$TargetIds = @()
+async def _windows_listening_pids(port: int) -> list[int]:
+    process = await asyncio.create_subprocess_exec(
+        "netstat",
+        "-ano",
+        "-p",
+        "TCP",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=5)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        return []
+    return _netstat_listening_pids(stdout.decode(errors="ignore"), port)
 
-function Stop-ProcessTree {{
-    param([int]$RootProcessId)
-    $AllProcesses = Get-Process -ErrorAction SilentlyContinue
-    $TreeIds = New-Object 'System.Collections.Generic.HashSet[int]'
-    [void]$TreeIds.Add($RootProcessId)
 
-    do {{
-        $Added = $false
-        foreach ($RunningProcess in $AllProcesses) {{
-            try {{
-                $ParentId = if ($RunningProcess.Parent) {{ [int]$RunningProcess.Parent.Id }} else {{ 0 }}
-            }} catch {{
-                $ParentId = 0
-            }}
-            if ($TreeIds.Contains($ParentId) -and -not $TreeIds.Contains([int]$RunningProcess.Id)) {{
-                [void]$TreeIds.Add([int]$RunningProcess.Id)
-                $Added = $true
-            }}
-        }}
-    }} while ($Added)
+def _netstat_listening_pids(output: str, port: int) -> list[int]:
+    pids: set[int] = set()
+    port_pattern = re.compile(rf":{port}(?!\d)")
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        if parts[0].upper() != "TCP" or parts[-2].upper() != "LISTENING":
+            continue
+        if not port_pattern.search(parts[1]):
+            continue
+        try:
+            pid = int(parts[-1])
+        except ValueError:
+            continue
+        if pid > 0:
+            pids.add(pid)
+    return sorted(pids)
 
-    $Targets = $AllProcesses | Where-Object {{ $TreeIds.Contains([int]$_.Id) }} | Sort-Object StartTime -Descending
-    foreach ($Target in $Targets) {{
-        Stop-Process -Id $Target.Id -Force -ErrorAction SilentlyContinue
-    }}
-}}
 
-$Connections = Get-NetTCPConnection -LocalPort $PortNumber -State Listen -ErrorAction SilentlyContinue
-foreach ($Connection in $Connections) {{
-    $OwnerId = [int]$Connection.OwningProcess
-    if ($OwnerId -le 0) {{
-        continue
-    }}
+def _is_matching_app_server_command_line(command_line: str, port: int) -> bool:
+    return (
+        "app-server" in command_line
+        and "--listen" in command_line
+        and re.search(rf":{port}(?!\d)", command_line) is not None
+    )
 
-    $Process = Get-CimInstance Win32_Process -Filter "ProcessId = $OwnerId" -ErrorAction SilentlyContinue
-    if ($null -eq $Process) {{
-        continue
-    }}
 
-    $CommandLine = [string]$Process.CommandLine
-    if ($CommandLine -match "app-server" -and $CommandLine -match "--listen" -and $CommandLine -match $PortPattern) {{
-        $TargetIds += $OwnerId
+def _windows_process_command_line(pid: int) -> str:
+    if os.name != "nt":
+        return ""
+    process_query_limited_information = 0x1000
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
 
-        $AncestorId = [int]$Process.ParentProcessId
-        while ($AncestorId -gt 0) {{
-            $Ancestor = Get-CimInstance Win32_Process -Filter "ProcessId = $AncestorId" -ErrorAction SilentlyContinue
-            if ($null -eq $Ancestor) {{
-                break
-            }}
-            $AncestorCommandLine = [string]$Ancestor.CommandLine
-            if (-not ($AncestorCommandLine -match "app-server" -and $AncestorCommandLine -match "--listen" -and $AncestorCommandLine -match $PortPattern)) {{
-                break
-            }}
-            $TargetIds += $AncestorId
-            $AncestorId = [int]$Ancestor.ParentProcessId
-        }}
-    }}
-}}
+    class UnicodeString(ctypes.Structure):
+        _fields_ = [
+            ("Length", ctypes.c_ushort),
+            ("MaximumLength", ctypes.c_ushort),
+            ("Buffer", ctypes.c_void_p),
+        ]
 
-$TargetIds = $TargetIds | Sort-Object -Unique
-foreach ($TargetId in $TargetIds) {{
-    Stop-ProcessTree -RootProcessId $TargetId
-}}
-
-$Deadline = (Get-Date).AddSeconds(5)
-while ((Get-Date) -lt $Deadline) {{
-    $Remaining = Get-NetTCPConnection -LocalPort $PortNumber -State Listen -ErrorAction SilentlyContinue |
-        Where-Object {{ $TargetIds -contains [int]$_.OwningProcess }}
-    if (-not $Remaining) {{
-        break
-    }}
-    Start-Sleep -Milliseconds 100
-}}
-"""
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return ""
+    try:
+        size = 32768
+        buffer = ctypes.create_string_buffer(size)
+        return_length = ctypes.c_ulong()
+        status = ntdll.NtQueryInformationProcess(
+            handle,
+            60,
+            ctypes.byref(buffer),
+            size,
+            ctypes.byref(return_length),
+        )
+        if status != 0:
+            return ""
+        value = UnicodeString.from_buffer_copy(buffer.raw[: ctypes.sizeof(UnicodeString)])
+        if not value.Length or not value.Buffer:
+            return ""
+        return ctypes.wstring_at(value.Buffer, value.Length // 2)
+    finally:
+        kernel32.CloseHandle(handle)

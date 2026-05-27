@@ -56,6 +56,9 @@ project_root="$(cd -- "${script_dir}/.." && pwd)"
 install_launchd_script="${script_dir}/install-macos-launchd.sh"
 uninstall_launchd_script="${script_dir}/uninstall-macos-launchd.sh"
 pytest_temp_root="${TMPDIR:-/tmp}/codex-gateway/pytest-temp"
+launchd_label="${CODEX_GATEWAY_MACOS_LAUNCHD_LABEL:-com.codex.gateway.telegram}"
+launchd_domain="gui/$(id -u)"
+launchd_plist_path="${HOME}/Library/LaunchAgents/${launchd_label}.plist"
 
 read_yes_no() {
   local prompt="$1"
@@ -89,6 +92,21 @@ read_yes_no() {
         ;;
     esac
   done
+}
+
+launchd_service_exists() {
+  if [ "${CODEX_GATEWAY_TEST_LAUNCHD_EXISTS+x}" ]; then
+    case "$(printf '%s' "$CODEX_GATEWAY_TEST_LAUNCHD_EXISTS" | tr '[:upper:]' '[:lower:]')" in
+      1|true|yes)
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  fi
+
+  [ -f "$launchd_plist_path" ] || launchctl print "${launchd_domain}/${launchd_label}" >/dev/null 2>&1
 }
 
 if [ "$remove_startup" -eq 1 ]; then
@@ -144,7 +162,13 @@ if [ "$skip_telegram_setup" -ne 1 ] && read_yes_no "Run Telegram setup now?" "ye
 fi
 
 started_gateway=0
-if [ "$skip_startup" -ne 1 ] && read_yes_no "Install and start Codex Gateway as a macOS launchd user service?" "no"; then
+launchd_exists=0
+startup_prompt="Install and start Codex Gateway as a macOS launchd user service?"
+if launchd_service_exists; then
+  launchd_exists=1
+  startup_prompt="Update and restart existing Codex Gateway launchd user service to apply current .env?"
+fi
+if [ "$skip_startup" -ne 1 ] && read_yes_no "$startup_prompt" "no"; then
   started_gateway=1
   bash "$install_launchd_script" --start
 fi
@@ -154,6 +178,9 @@ if [ "$ran_telegram_setup" -eq 1 ]; then
   if [ "$started_gateway" -eq 1 ]; then
     echo "Codex Gateway can receive Telegram messages now."
     echo "Send /start from the configured Telegram user to get the pairing command."
+  elif [ "$launchd_exists" -eq 1 ]; then
+    echo "Existing launchd service was not restarted. Run this to apply .env changes:"
+    echo "  bash scripts/install-macos-launchd.sh --start"
   else
     echo "Start the gateway, then send /start from the configured Telegram user to get the pairing command:"
     echo "  uv run codex-gateway telegram run"
@@ -168,5 +195,7 @@ fi
 echo "  uv run codex-gateway telegram status"
 if [ "$started_gateway" -ne 1 ]; then
   echo "  bash scripts/install-macos-launchd.sh --start"
-  echo "  uv run codex-gateway telegram run"
+  if [ "$launchd_exists" -ne 1 ]; then
+    echo "  uv run codex-gateway telegram run"
+  fi
 fi

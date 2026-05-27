@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shlex
 import shutil
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class JsonRpcError(RuntimeError):
@@ -559,7 +563,7 @@ class AppServerClient:
         future: asyncio.Future[Any] = loop.create_future()
         self._pending[request_id] = future
         try:
-            await self.transport.send(
+            await self._transport_send(
                 {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -580,7 +584,7 @@ class AppServerClient:
     async def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         if self.transport is None:
             raise JsonRpcError("Transport is required")
-        await self.transport.send({"jsonrpc": "2.0", "method": method, "params": params or {}})
+        await self._transport_send({"jsonrpc": "2.0", "method": method, "params": params or {}})
 
     async def send_approval_decision(self, request_id: int | str, decision: str) -> None:
         await self._send_response(request_id, {"decision": decision})
@@ -629,14 +633,25 @@ class AppServerClient:
     ) -> None:
         if self.transport is None:
             raise JsonRpcError("Transport is required")
-        await self.transport.send(
+        await self._transport_send(
             {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
         )
 
     async def _send_response(self, request_id: int | str, result: dict[str, Any]) -> None:
         if self.transport is None:
             raise JsonRpcError("Transport is required")
-        await self.transport.send({"jsonrpc": "2.0", "id": request_id, "result": result})
+        await self._transport_send({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+    async def _transport_send(self, message: dict[str, Any]) -> None:
+        if self.transport is None:
+            raise JsonRpcError("Transport is required")
+        try:
+            await self.transport.send(message)
+        except JsonRpcError:
+            raise
+        except Exception as exc:
+            detail = str(exc) or exc.__class__.__name__
+            raise JsonRpcError(f"App-server transport send failed: {detail}") from exc
 
     async def _read_loop(self) -> None:
         try:
@@ -677,9 +692,20 @@ class AppServerClient:
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
         event = AppServerEvent(method=method, params=params, request_id=message.get("id"))
         if "id" in message:
-            await _maybe_await(self.on_request, event)
+            try:
+                await _maybe_await(self.on_request, event)
+            except Exception as exc:
+                LOGGER.exception("App-server request handler failed for %s", method)
+                try:
+                    request_id = event.request_id if event.request_id is not None else message["id"]
+                    await self.send_error_response(request_id, str(exc))
+                except Exception:
+                    LOGGER.exception("Failed to send app-server error response for %s", method)
         else:
-            await _maybe_await(self.on_notification, event)
+            try:
+                await _maybe_await(self.on_notification, event)
+            except Exception:
+                LOGGER.exception("App-server notification handler failed for %s", method)
 
     def _fail_pending(self, exc: Exception) -> None:
         pending = list(self._pending.values())

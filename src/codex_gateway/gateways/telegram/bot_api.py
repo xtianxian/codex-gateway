@@ -12,7 +12,9 @@ MAX_TELEGRAM_TEXT = 3500
 
 
 class TelegramAPIError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, ambiguous_delivery: bool = False) -> None:
+        super().__init__(message)
+        self.ambiguous_delivery = ambiguous_delivery
 
 
 class TelegramBotAPI:
@@ -72,7 +74,13 @@ class TelegramBotAPI:
                 payload["reply_to_message_id"] = reply_to_message_id
             if reply_markup:
                 payload["reply_markup"] = reply_markup
-            results.append(await self._request("sendMessage", payload))
+            results.append(
+                await self._request(
+                    "sendMessage",
+                    payload,
+                    ambiguous_delivery_on_timeout=True,
+                )
+            )
         return results
 
     async def edit_message_text(
@@ -345,7 +353,7 @@ class TelegramBotAPI:
                 data={"chat_id": str(chat_id), "media": media},
                 files=files,
             )
-        return await self._request("sendMediaGroup", payload)
+        return await self._request("sendMediaGroup", payload, ambiguous_delivery_on_timeout=True)
 
     async def send_paid_media(
         self,
@@ -368,7 +376,7 @@ class TelegramBotAPI:
                 data=request_payload,
                 files=files,
             )
-        return await self._request("sendPaidMedia", request_payload)
+        return await self._request("sendPaidMedia", request_payload, ambiguous_delivery_on_timeout=True)
 
     async def send_contact(
         self,
@@ -384,7 +392,7 @@ class TelegramBotAPI:
             payload["last_name"] = last_name
         if vcard:
             payload["vcard"] = vcard
-        return await self._request("sendContact", payload)
+        return await self._request("sendContact", payload, ambiguous_delivery_on_timeout=True)
 
     async def send_location(
         self,
@@ -395,7 +403,7 @@ class TelegramBotAPI:
     ) -> Any:
         payload: dict[str, Any] = {"chat_id": chat_id, "latitude": latitude, "longitude": longitude}
         payload.update({key: value for key, value in options.items() if value is not None})
-        return await self._request("sendLocation", payload)
+        return await self._request("sendLocation", payload, ambiguous_delivery_on_timeout=True)
 
     async def send_venue(
         self,
@@ -414,7 +422,7 @@ class TelegramBotAPI:
             "address": address,
         }
         payload.update({key: value for key, value in options.items() if value is not None})
-        return await self._request("sendVenue", payload)
+        return await self._request("sendVenue", payload, ambiguous_delivery_on_timeout=True)
 
     async def send_poll(
         self,
@@ -430,7 +438,7 @@ class TelegramBotAPI:
             normalized_options = options
         payload: dict[str, Any] = {"chat_id": chat_id, "question": question, "options": normalized_options}
         payload.update({key: value for key, value in settings.items() if value is not None})
-        return await self._request("sendPoll", payload)
+        return await self._request("sendPoll", payload, ambiguous_delivery_on_timeout=True)
 
     async def send_checklist(
         self,
@@ -445,13 +453,14 @@ class TelegramBotAPI:
                 "business_connection_id": business_connection_id,
                 "checklist": checklist,
             },
+            ambiguous_delivery_on_timeout=True,
         )
 
     async def send_dice(self, chat_id: str | int, *, emoji: str | None = None) -> Any:
         payload: dict[str, Any] = {"chat_id": chat_id}
         if emoji:
             payload["emoji"] = emoji
-        return await self._request("sendDice", payload)
+        return await self._request("sendDice", payload, ambiguous_delivery_on_timeout=True)
 
     async def copy_message(
         self,
@@ -462,7 +471,7 @@ class TelegramBotAPI:
     ) -> Any:
         payload: dict[str, Any] = {"chat_id": chat_id, "from_chat_id": from_chat_id, "message_id": message_id}
         payload.update({key: value for key, value in options.items() if value is not None})
-        return await self._request("copyMessage", payload)
+        return await self._request("copyMessage", payload, ambiguous_delivery_on_timeout=True)
 
     async def forward_message(
         self,
@@ -473,7 +482,7 @@ class TelegramBotAPI:
     ) -> Any:
         payload: dict[str, Any] = {"chat_id": chat_id, "from_chat_id": from_chat_id, "message_id": message_id}
         payload.update({key: value for key, value in options.items() if value is not None})
-        return await self._request("forwardMessage", payload)
+        return await self._request("forwardMessage", payload, ambiguous_delivery_on_timeout=True)
 
     async def set_my_commands(self, commands: list[dict[str, str]]) -> Any:
         return await self._request("setMyCommands", {"commands": commands})
@@ -512,6 +521,7 @@ class TelegramBotAPI:
         payload: dict[str, Any],
         *,
         timeout: float | None = None,
+        ambiguous_delivery_on_timeout: bool = False,
     ) -> Any:
         url = f"{self.base_url}/bot{self.token}/{method}"
         try:
@@ -519,7 +529,8 @@ class TelegramBotAPI:
         except httpx.HTTPError as exc:
             detail = str(exc) or exc.__class__.__name__
             raise TelegramAPIError(
-                self._redact(f"Telegram API {method} failed: {detail}")
+                self._redact(f"Telegram API {method} failed: {detail}"),
+                ambiguous_delivery=ambiguous_delivery_on_timeout and isinstance(exc, httpx.ReadTimeout),
             ) from exc
         body_text = response.text
         try:
@@ -593,7 +604,10 @@ class TelegramBotAPI:
             response = await self.client.post(url, data=form_data, files=files)
         except httpx.HTTPError as exc:
             detail = str(exc) or exc.__class__.__name__
-            raise TelegramAPIError(self._redact(f"Telegram API {method} failed: {detail}")) from exc
+            raise TelegramAPIError(
+                self._redact(f"Telegram API {method} failed: {detail}"),
+                ambiguous_delivery=isinstance(exc, httpx.ReadTimeout),
+            ) from exc
         body_text = response.text
         try:
             payload = response.json()

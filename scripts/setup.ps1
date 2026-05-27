@@ -44,6 +44,15 @@ function Test-IsAdministrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Test-StartupServiceExists {
+    if ($null -ne $env:CODEX_GATEWAY_TEST_SERVICE_EXISTS) {
+        $normalized = $env:CODEX_GATEWAY_TEST_SERVICE_EXISTS.Trim().ToLowerInvariant()
+        return $normalized -eq "1" -or $normalized -eq "true" -or $normalized -eq "yes"
+    }
+
+    return $null -ne (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)
+}
+
 function Assert-ServiceElevation {
     param(
         [Parameter(Mandatory = $true)]
@@ -135,9 +144,16 @@ function Read-YesNo {
 }
 
 function Install-StartupService {
+    param([bool]$Existing)
+
     Assert-ServiceElevation -Action "Installing and starting"
     & $InstallServiceScript -ServiceName $ServiceName -DisplayName $ServiceDisplayName -Start
-    Write-Host "Windows Service installed and started: $ServiceName"
+    if ($Existing) {
+        Write-Host "Windows Service updated and restarted: $ServiceName"
+    }
+    else {
+        Write-Host "Windows Service installed and started: $ServiceName"
+    }
     Write-Host "Logs: $LogDirectory"
 }
 
@@ -194,8 +210,15 @@ if ((-not $SkipTelegramSetup) -and (Read-YesNo -Prompt "Run Telegram setup now?"
 }
 
 $startedGateway = $false
-if ((-not $SkipStartup) -and (Read-YesNo -Prompt "Install and start Codex Gateway as a Windows Service (requires elevated PowerShell)?" -Default $false)) {
-    Install-StartupService
+$startupServiceExists = Test-StartupServiceExists
+$startupPrompt = if ($startupServiceExists) {
+    "Update and restart existing Codex Gateway Windows Service to apply current .env (requires elevated PowerShell)?"
+}
+else {
+    "Install and start Codex Gateway as a Windows Service (requires elevated PowerShell)?"
+}
+if ((-not $SkipStartup) -and (Read-YesNo -Prompt $startupPrompt -Default $false)) {
+    Install-StartupService -Existing $startupServiceExists
     $startedGateway = $true
 }
 
@@ -206,8 +229,14 @@ if ($ranTelegramSetup) {
         Write-Host "Send /start from the configured Telegram user to get the pairing command."
     }
     else {
-        Write-Host "Start the gateway, then send /start from the configured Telegram user to get the pairing command:"
-        Write-Host "  uv run codex-gateway telegram run"
+        if ($startupServiceExists) {
+            Write-Host "Existing Windows Service was not restarted. Run this to apply .env changes:"
+            Write-Host "  .\scripts\install-gateway-service.ps1 -Start"
+        }
+        else {
+            Write-Host "Start the gateway, then send /start from the configured Telegram user to get the pairing command:"
+            Write-Host "  uv run codex-gateway telegram run"
+        }
     }
 }
 
@@ -219,5 +248,7 @@ if (-not $ranTelegramSetup) {
 Write-Host "  uv run codex-gateway telegram status"
 if (-not $startedGateway) {
     Write-Host "  .\scripts\install-gateway-service.ps1 -Start"
-    Write-Host "  uv run codex-gateway telegram run"
+    if (-not $startupServiceExists) {
+        Write-Host "  uv run codex-gateway telegram run"
+    }
 }

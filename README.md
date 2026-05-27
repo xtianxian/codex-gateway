@@ -207,9 +207,15 @@ Use these blocks when you already know which operation you need.
 | Install or update Windows Service | `.\scripts\install-gateway-service.ps1 -Start` from elevated PowerShell |
 | Restart Windows Service | `Restart-Service CodexGateway` from elevated PowerShell |
 | Remove Windows Service | `.\scripts\setup.ps1 -RemoveStartup` from elevated PowerShell |
+| Full Windows gateway uninstall | `.\scripts\uninstall-gateway.ps1` from elevated PowerShell when the service exists |
+| Full Windows gateway uninstall dry run | `.\scripts\uninstall-gateway.ps1 -WhatIf` |
+| Full Windows gateway uninstall with Docker gateway volumes | `.\scripts\uninstall-gateway.ps1 -DockerGatewayVolumes` |
 | Run macOS setup | `bash scripts/setup-macos.sh` |
 | Install or update macOS launchd service | `bash scripts/install-macos-launchd.sh --start` |
 | Remove macOS launchd service | `bash scripts/setup-macos.sh --remove-startup` |
+| Full macOS/Linux gateway uninstall | `bash scripts/uninstall-gateway.sh` |
+| Full macOS/Linux gateway uninstall dry run | `bash scripts/uninstall-gateway.sh --dry-run` |
+| Full macOS/Linux gateway uninstall with Docker gateway volumes | `bash scripts/uninstall-gateway.sh --docker-gateway-volumes` |
 
 Full first-run sequence:
 
@@ -283,8 +289,8 @@ override `.env` values.
 | `CODEX_GATEWAY_CODEX_BIN` | Codex executable, default `codex`. |
 | `CODEX_GATEWAY_APP_SERVER_URL` | Loopback WebSocket URL, default `ws://127.0.0.1:8765`. |
 | `CODEX_GATEWAY_APP_SERVER_TRANSPORT` | `websocket` or `stdio`, default `websocket`. |
-| `CODEX_GATEWAY_TELEGRAM_MODEL` | Initial model for new threads before a chat chooses one with `/model`; setup defaults to `gpt-5.4-mini`. |
-| `CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT` | Initial reasoning effort for that model; setup defaults to `medium`. |
+| `CODEX_GATEWAY_TELEGRAM_MODEL` | Initial model for new threads before a chat chooses one with `/model`; setup writes `gpt-5.4-mini` by default. |
+| `CODEX_GATEWAY_TELEGRAM_MODEL_REASONING_EFFORT` | Initial reasoning effort for that model; setup writes `medium` by default. |
 | `CODEX_GATEWAY_TELEGRAM_PERMISSION_PROFILE` | Default permissions for new Telegram threads: `:read-only`, `:workspace`, `:auto-review`, or `:danger-full-access`. |
 | `CODEX_GATEWAY_TELEGRAM_SANDBOX` | Sandbox setting for app-server threads. |
 | `CODEX_GATEWAY_TELEGRAM_APPROVAL_POLICY` | Approval policy for app-server requests. |
@@ -319,6 +325,30 @@ The optional `CodexGateway` Windows Service starts the Telegram gateway without
 a foreground console window and writes logs under `.codex-gateway\logs\service`.
 Install, restart, and removal commands live in the
 [Windows setup guide](docs/windows.md#service-install-start-restart).
+
+## Cleanup And Uninstall
+
+Use the startup-only removal commands when you only want to remove the Windows
+Service, macOS launchd service, or Linux systemd unit. Use the full gateway
+uninstall scripts when you want a gateway-only reset: startup integration,
+matching gateway processes, local `.env`, `.codex-gateway` state/logs, and safe
+Telegram state directories are removed. Workspaces, Codex CLI login/auth,
+Docker `codex-home`, and Telegram BotFather token state are preserved.
+On Windows, setup and uninstall manage only the supported `CodexGateway`
+Windows Service; they do not remove startup artifacts they did not create.
+
+Dry-run first:
+
+```powershell
+.\scripts\uninstall-gateway.ps1 -WhatIf
+```
+
+```bash
+bash scripts/uninstall-gateway.sh --dry-run
+```
+
+Docker gateway config/state volumes are removed only when explicitly requested
+with `-DockerGatewayVolumes` or `--docker-gateway-volumes`.
 
 ## Troubleshooting
 
