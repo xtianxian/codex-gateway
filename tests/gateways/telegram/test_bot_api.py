@@ -42,6 +42,34 @@ async def test_httpx_timeout_error_names_exception_when_message_is_empty() -> No
 
 
 @pytest.mark.asyncio
+async def test_owned_client_recreation_closes_and_replaces_client() -> None:
+    api = TelegramBotAPI("test-token")
+    old_client = api.client
+
+    assert await api.recreate_client() is True
+
+    assert old_client.is_closed
+    assert api.client is not old_client
+    assert not api.client.is_closed
+    await api.aclose()
+    assert api.client.is_closed
+
+
+@pytest.mark.asyncio
+async def test_injected_client_recreation_is_noop() -> None:
+    client = httpx.AsyncClient(base_url="https://api.telegram.org")
+    api = TelegramBotAPI("test-token", client=client)
+
+    assert await api.recreate_client() is False
+
+    assert api.client is client
+    assert not client.is_closed
+    await api.aclose()
+    assert not client.is_closed
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_send_message_chunks_long_text() -> None:
     requests: list[dict[str, object]] = []
 

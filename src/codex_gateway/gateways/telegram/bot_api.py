@@ -32,6 +32,14 @@ class TelegramBotAPI:
         if self._owns_client:
             await self.client.aclose()
 
+    async def recreate_client(self) -> bool:
+        if not self._owns_client:
+            return False
+        old_client = self.client
+        self.client = httpx.AsyncClient(base_url=self.base_url)
+        await old_client.aclose()
+        return True
+
     async def get_updates(
         self,
         *,

@@ -6,7 +6,9 @@ import logging
 import mimetypes
 import secrets
 import sys
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from inspect import isawaitable
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -188,12 +190,25 @@ from .types import OutputAttachment, TurnContext
 
 
 LOGGER = logging.getLogger(__name__)
+TELEGRAM_POLL_RETRY_DELAY_SECONDS = 5.0
+TELEGRAM_POLL_RECREATE_FAILURES = 3
+TELEGRAM_POLL_WATCHDOG_GRACE_SECONDS = 15.0
+TELEGRAM_POLL_HEARTBEAT_SECONDS = 300.0
 PLAN_CHOICE_TEXT = (
     "Implement this plan?\n\n"
     "1. Yes, implement this plan\n"
     "2. Yes, clear context and implement\n"
     "3. No, stay in Plan mode"
 )
+
+
+@dataclass
+class TelegramPollingState:
+    latest_offset: int | None = None
+    consecutive_failures: int = 0
+    last_success_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
+    client_recreated_during_failure_streak: bool = False
 
 
 def _plan_implementation_prompt(plan_text: str) -> str:
@@ -769,16 +784,19 @@ async def run_telegram_bridge() -> None:
         if sync_error:
             print(f"Warning: Telegram command menu sync failed: {sync_error}", file=sys.stderr)
         offset: int | None = initial_poll_offset(store)
+        polling_state = TelegramPollingState(latest_offset=offset)
         while True:
             updates = await get_updates_with_retry(
                 bot,
                 offset=offset,
                 timeout=settings.poll_timeout_seconds,
+                state=polling_state,
             )
             for update in updates:
                 update_id = update.get("update_id")
                 if isinstance(update_id, int):
                     offset = update_id + 1
+                    polling_state.latest_offset = offset
                 await bridge.handle_update(update)
     finally:
         bridge.stop_typing_indicators()
@@ -794,20 +812,225 @@ async def get_updates_with_retry(
     *,
     offset: int | None,
     timeout: int,
-    retry_delay_seconds: float = 5.0,
-    sleep: Any = asyncio.sleep,
-    warn: Any = None,
+    retry_delay_seconds: float = TELEGRAM_POLL_RETRY_DELAY_SECONDS,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    warn: Callable[[str], Any] | None = None,
+    state: TelegramPollingState | None = None,
+    watchdog_timeout_seconds: float | None = None,
+    heartbeat_interval_seconds: float = TELEGRAM_POLL_HEARTBEAT_SECONDS,
+    recreate_after_failures: int = TELEGRAM_POLL_RECREATE_FAILURES,
+    now_fn: Callable[[], datetime] | None = None,
 ) -> list[dict[str, Any]]:
+    if now_fn is None:
+        now_fn = _polling_utc_now
+    polling_state = state or TelegramPollingState()
+    polling_state.latest_offset = offset
+    watchdog = watchdog_timeout_seconds
+    if watchdog is None:
+        watchdog = timeout + TELEGRAM_POLL_WATCHDOG_GRACE_SECONDS
     while True:
+        now = now_fn()
+        await _maybe_emit_polling_heartbeat(
+            polling_state,
+            retry_delay_seconds=retry_delay_seconds,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            now=now,
+            warn=warn,
+        )
         try:
-            return await bot.get_updates(offset=offset, timeout=timeout)
+            updates = await asyncio.wait_for(
+                bot.get_updates(offset=offset, timeout=timeout),
+                timeout=watchdog,
+            )
         except TelegramAPIError as exc:
-            message = f"Telegram polling failed: {exc}; retrying in {retry_delay_seconds:g}s."
-            if warn is None:
-                print(f"Warning: {message}", file=sys.stderr)
-            else:
-                warn(message)
+            polling_state.consecutive_failures += 1
+            client_recreated = await _maybe_recreate_polling_client(
+                bot,
+                polling_state,
+                recreate_after_failures=recreate_after_failures,
+            )
+            await _emit_polling_warning(
+                _polling_failure_message(
+                    polling_state,
+                    retry_delay_seconds=retry_delay_seconds,
+                    client_recreated=client_recreated,
+                    now=now_fn(),
+                    error=str(exc),
+                ),
+                warn,
+            )
             await sleep(retry_delay_seconds)
+        except asyncio.TimeoutError:
+            polling_state.consecutive_failures += 1
+            client_recreated = await _maybe_recreate_polling_client(
+                bot,
+                polling_state,
+                recreate_after_failures=recreate_after_failures,
+            )
+            await _emit_polling_warning(
+                _polling_failure_message(
+                    polling_state,
+                    retry_delay_seconds=retry_delay_seconds,
+                    client_recreated=client_recreated,
+                    now=now_fn(),
+                    error=f"getUpdates watchdog timed out after {watchdog:g}s",
+                ),
+                warn,
+            )
+            await sleep(retry_delay_seconds)
+        else:
+            previous_failures = polling_state.consecutive_failures
+            client_recreated = polling_state.client_recreated_during_failure_streak
+            polling_state.last_success_at = now_fn()
+            polling_state.consecutive_failures = 0
+            polling_state.client_recreated_during_failure_streak = False
+            if previous_failures:
+                await _emit_polling_warning(
+                    _polling_recovery_message(
+                        polling_state,
+                        previous_failures=previous_failures,
+                        retry_delay_seconds=retry_delay_seconds,
+                        client_recreated=client_recreated,
+                        now=polling_state.last_success_at,
+                    ),
+                    warn,
+                )
+            return updates
+
+
+def _polling_utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+async def _maybe_recreate_polling_client(
+    bot: Any,
+    state: TelegramPollingState,
+    *,
+    recreate_after_failures: int,
+) -> str:
+    if recreate_after_failures <= 0 or state.consecutive_failures % recreate_after_failures != 0:
+        return "no"
+    recreate_client = getattr(bot, "recreate_client", None)
+    if recreate_client is None:
+        return "no"
+    try:
+        result = recreate_client()
+        if isawaitable(result):
+            result = await result
+    except Exception:
+        return "failed"
+    if bool(result):
+        state.client_recreated_during_failure_streak = True
+        return "yes"
+    return "no"
+
+
+async def _maybe_emit_polling_heartbeat(
+    state: TelegramPollingState,
+    *,
+    retry_delay_seconds: float,
+    heartbeat_interval_seconds: float,
+    now: datetime,
+    warn: Callable[[str], Any] | None,
+) -> None:
+    if state.last_heartbeat_at is None:
+        if heartbeat_interval_seconds > 0:
+            state.last_heartbeat_at = now
+            return
+    elif (
+        heartbeat_interval_seconds > 0
+        and (now - state.last_heartbeat_at).total_seconds() < heartbeat_interval_seconds
+    ):
+        return
+    state.last_heartbeat_at = now
+    await _emit_polling_warning(
+        "Telegram polling heartbeat: "
+        + _polling_diagnostic_fields(
+            state,
+            retry_delay_seconds=retry_delay_seconds,
+            now=now,
+        ),
+        warn,
+    )
+
+
+def _polling_failure_message(
+    state: TelegramPollingState,
+    *,
+    retry_delay_seconds: float,
+    client_recreated: str,
+    now: datetime,
+    error: str,
+) -> str:
+    return (
+        "Telegram polling failed: "
+        + _polling_diagnostic_fields(
+            state,
+            retry_delay_seconds=retry_delay_seconds,
+            now=now,
+        )
+        + f" client_recreated={client_recreated} error={error}"
+    )
+
+
+def _polling_recovery_message(
+    state: TelegramPollingState,
+    *,
+    previous_failures: int,
+    retry_delay_seconds: float,
+    client_recreated: bool,
+    now: datetime,
+) -> str:
+    return (
+        f"Telegram polling recovered: previous_failures={previous_failures} "
+        + _polling_diagnostic_fields(
+            state,
+            retry_delay_seconds=retry_delay_seconds,
+            now=now,
+        )
+        + f" client_recreated={'yes' if client_recreated else 'no'}"
+    )
+
+
+def _polling_diagnostic_fields(
+    state: TelegramPollingState,
+    *,
+    retry_delay_seconds: float,
+    now: datetime,
+) -> str:
+    last_success = _format_polling_time(state.last_success_at)
+    age = _format_polling_age(state.last_success_at, now)
+    offset = state.latest_offset if state.latest_offset is not None else "none"
+    return (
+        f"failure_count={state.consecutive_failures} "
+        f"consecutive_failures={state.consecutive_failures} "
+        f"retry_delay={retry_delay_seconds:g}s "
+        f"last_success_utc={last_success} "
+        f"last_success_age={age} "
+        f"latest_offset={offset}"
+    )
+
+
+def _format_polling_time(value: datetime | None) -> str:
+    if value is None:
+        return "never"
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _format_polling_age(value: datetime | None, now: datetime) -> str:
+    if value is None:
+        return "unknown"
+    age_seconds = max(0, int((now - value).total_seconds()))
+    return f"{age_seconds}s"
+
+
+async def _emit_polling_warning(message: str, warn: Callable[[str], Any] | None) -> None:
+    if warn is None:
+        print(f"Warning: {message}", file=sys.stderr)
+        return
+    result = warn(message)
+    if isawaitable(result):
+        await result
 
 
 def telegram_status_summary(settings: TelegramSettings, store: TelegramStateStore) -> dict[str, Any]:
