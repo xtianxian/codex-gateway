@@ -118,3 +118,8 @@ def test_command_coverage_accepts_explicit_skip_classification() -> None:
     smoke._assert_command_coverage(results, skipped_command_names={"apps"})
 
     assert [result for result in results if result.status == "fail"] == []
+
+
+@pytest.mark.asyncio
+async def test_native_payload_probe_mode_runs_without_live_services() -> None:
+    assert await smoke.run_native_payload_smoke() == 0

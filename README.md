@@ -162,6 +162,7 @@ documented runtime targets.
 | Docker | Containerized runtime with persistent Codex, gateway, and workspace volumes. | [Open Docker guide](docs/docker.md) |
 | Linux | Linux setup, foreground runtime, and systemd-style service notes. | [Open Linux guide](docs/linux.md) |
 | macOS | Local setup with Bash helpers and optional launchd user service. | [Open macOS guide](docs/macos.md) |
+| Testing | Local test suite and smoke-probe commands. | [Open testing guide](docs/testing.md) |
 
 After setup, send `/start` to the Telegram bot from the configured user and
 run the local pairing command the bot returns.
@@ -363,33 +364,12 @@ Environment-specific troubleshooting lives with each setup guide:
 
 ## Development
 
-Install dependencies and run tests:
+Install dependencies and run tests. See the [testing guide](docs/testing.md) for
+native Telegram payload, hybrid app-server, Docker, and WSL validation commands.
 
 ```powershell
 uv sync --extra dev
 uv run pytest
-```
-
-Optional smoke probe against a real local app-server:
-
-```powershell
-uv run --script testing\probes\mock_bot_real_app_server_smoke.py --include-turns --exhaustive
-```
-
-The smoke probe requires an authenticated Codex CLI and may start a real local
-app-server process.
-
-Linux container verification:
-
-```powershell
-docker compose -f testing\docker\compose.linux.yaml build
-docker compose -f testing\docker\compose.linux.yaml run --rm codex-gateway-cli test
-```
-
-WSL2 Ubuntu verification:
-
-```powershell
-wsl -d Ubuntu -e bash -lc 'cd ~/src/codex-gateway && uv run pytest -p no:cacheprovider --basetemp ~/.local/state/codex-gateway/pytest-wsl-full'
 ```
 
 ## Repository Layout
