@@ -157,6 +157,9 @@ from .constants import (
     _AUTH_HEADER_PATTERN,
     _SECRET_PATTERNS,
     TYPING_ACTION_INTERVAL_SECONDS,
+    IDLE_PROGRESS_NOTICE_SECONDS,
+    STALE_RECONCILE_SECONDS,
+    STALE_RECONCILIATION_TIMEOUT_SECONDS,
     AUTO_THREAD_TITLE_MAX_CHARS,
     APPROVAL_POLICY_CHOICES,
     EFFORT_CHOICES,
@@ -636,23 +639,28 @@ class TelegramBridgeThreadMixin:
     async def _send_status(self, chat_id: str) -> None:
         workspace = self._active_workspace(chat_id)
         record = self._thread_record(chat_id, workspace)
+        active_context = self._active_turn_context(chat_id)
         config_result, account_result, limits_result = await asyncio.gather(
             self._status_call(lambda: self.app_server.config_read(cwd=str(workspace), include_layers=False)),
             self._status_call(lambda: self.app_server.account_read(refresh_token=False)),
             self._status_call(self.app_server.account_rate_limits_read),
         )
+        status_text = _format_gateway_status(
+            workspace=workspace,
+            record=record,
+            default_sandbox=self.settings.sandbox,
+            default_approval_policy=self.settings.approval_policy,
+            default_permission_profile=self.settings.permission_profile,
+            config_result=config_result,
+            account_result=account_result,
+            limits_result=limits_result,
+        )
+        active_lines = self._active_turn_status_lines(active_context)
+        if active_lines:
+            status_text = f"{status_text}\n\n" + "\n".join(active_lines)
         await self._send(
             chat_id,
-            _format_gateway_status(
-                workspace=workspace,
-                record=record,
-                default_sandbox=self.settings.sandbox,
-                default_approval_policy=self.settings.approval_policy,
-                default_permission_profile=self.settings.permission_profile,
-                config_result=config_result,
-                account_result=account_result,
-                limits_result=limits_result,
-            ),
+            status_text,
         )
 
 
@@ -876,16 +884,43 @@ class TelegramBridgeThreadMixin:
         context = self._active_turn_context(chat_id)
         if context is None:
             return None
-        if await self._recover_completed_active_turn_context(context):
+        if await self._maybe_reconcile_active_turn_context(context):
             return None
         return context
 
 
-    async def _recover_completed_active_turn_context(self, context: TurnContext) -> bool:
+    async def _maybe_reconcile_active_turn_context(self, context: TurnContext) -> bool:
+        if context.waiting_on_user:
+            return False
+        now = self.access.now_fn()
+        last_progress_age = max(0.0, (now - context.last_progress_at).total_seconds())
+        if last_progress_age < IDLE_PROGRESS_NOTICE_SECONDS:
+            return False
+        if context.last_user_status_notice_at is None:
+            sent = await self._send_user_notice(
+                context.chat_id,
+                "turn_idle_check",
+                "This turn has not shown progress recently. Checking its status.",
+            )
+            if sent:
+                context.last_user_status_notice_at = now
+        if last_progress_age < STALE_RECONCILE_SECONDS:
+            return False
+        if (
+            context.last_reconcile_at is not None
+            and (now - context.last_reconcile_at).total_seconds() < STALE_RECONCILE_SECONDS
+        ):
+            return False
+        context.last_reconcile_at = now
+        context.reconcile_attempts += 1
+        return await self._recover_completed_active_turn_context(context, notify=True)
+
+
+    async def _recover_completed_active_turn_context(self, context: TurnContext, *, notify: bool = False) -> bool:
         if not hasattr(self.app_server, "thread_read"):
             return False
         try:
-            result = await self.app_server.thread_read(thread_id=context.thread_id, include_turns=True)
+            result = await self._thread_read_for_reconciliation(context)
         except Exception as exc:
             LOGGER.debug("Failed to verify active turn %s: %s", context.turn_id, exc)
             return False
@@ -896,17 +931,69 @@ class TelegramBridgeThreadMixin:
             if isinstance(turn, dict) and str(turn.get("id") or "") == context.turn_id:
                 if _turn_record_is_terminal(turn):
                     self._mark_turn_context_completed(context)
+                    if notify:
+                        await self._send_user_notice(
+                            context.chat_id,
+                            "stale_turn_recovered",
+                            "Recovered the completed turn state. You can send the next message.",
+                        )
                     return True
                 return False
         if _thread_record_is_idle(thread):
             self._mark_turn_context_completed(context)
+            if notify:
+                await self._send_user_notice(
+                    context.chat_id,
+                    "stale_turn_recovered",
+                    "Recovered the completed turn state. You can send the next message.",
+                )
             return True
         return False
 
 
+    async def _thread_read_for_reconciliation(self, context: TurnContext) -> Any:
+        request = getattr(self.app_server, "request", None)
+        if callable(request):
+            return await request(
+                "thread/read",
+                {"threadId": context.thread_id, "includeTurns": True},
+                timeout_seconds=STALE_RECONCILIATION_TIMEOUT_SECONDS,
+            )
+        return await asyncio.wait_for(
+            self.app_server.thread_read(thread_id=context.thread_id, include_turns=True),
+            timeout=STALE_RECONCILIATION_TIMEOUT_SECONDS,
+        )
+
+
     def _mark_turn_context_completed(self, context: TurnContext) -> None:
         context.completed = True
+        context.terminal_seen = True
+        context.completed_at = self.access.now_fn()
+        context.waiting_on_user = False
+        context.waiting_prompt_type = None
         self._stop_typing_indicator(context.turn_id)
+
+
+    def _active_turn_status_lines(self, context: TurnContext | None) -> list[str]:
+        state = getattr(self, "app_server_state", "ready")
+        if context is None:
+            return [f"App-server: {state}"]
+        now = self.access.now_fn()
+        age = _duration_label((now - context.started_at).total_seconds())
+        progress_age = _duration_label((now - context.last_progress_at).total_seconds())
+        waiting = (
+            f"waiting on {context.waiting_prompt_type or 'user input'}"
+            if context.waiting_on_user
+            else "running"
+        )
+        return [
+            f"App-server: {state}",
+            f"Active turn: {context.turn_id}",
+            f"Turn state: {waiting}",
+            f"Turn age: {age}",
+            f"Last progress: {progress_age} ago ({context.last_progress_kind})",
+            "Recovery: use /steer <text> or /cancel.",
+        ]
 
 
     async def _default_model_setting(self) -> str | None:
@@ -1192,3 +1279,14 @@ def _thread_record_is_idle(thread: dict[str, Any]) -> bool:
     elif str(status or "").lower() != "idle":
         return False
     return not thread.get("activeTurnId")
+
+
+def _duration_label(seconds: float) -> str:
+    total = max(0, int(seconds))
+    if total < 60:
+        return f"{total}s"
+    minutes, rem = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m {rem}s" if rem else f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m" if minutes else f"{hours}h"

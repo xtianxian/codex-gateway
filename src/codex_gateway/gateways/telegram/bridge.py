@@ -160,6 +160,7 @@ from .constants import (
     _AUTH_HEADER_PATTERN,
     _SECRET_PATTERNS,
     TYPING_ACTION_INTERVAL_SECONDS,
+    TELEGRAM_UPDATE_HANDLE_TIMEOUT_SECONDS,
     AUTO_THREAD_TITLE_MAX_CHARS,
     APPROVAL_POLICY_CHOICES,
     EFFORT_CHOICES,
@@ -211,6 +212,12 @@ class TelegramPollingState:
     client_recreated_during_failure_streak: bool = False
 
 
+@dataclass
+class AppServerRuntime:
+    client: AppServerClient
+    process_manager: AppServerProcessManager | None = None
+
+
 def _plan_implementation_prompt(plan_text: str) -> str:
     return (
         "Implement this plan now. Re-read files as needed, and carry the work through "
@@ -255,6 +262,8 @@ class TelegramBridge(
         self.typing_tasks: dict[str, asyncio.Task[None]] = {}
         self.background_tasks: set[asyncio.Task[Any]] = set()
         self.guardian_denials_by_thread: dict[str, list[dict[str, Any]]] = {}
+        self.user_notice_times: dict[tuple[str, str], datetime] = {}
+        self.app_server_state = "ready"
 
     async def sync_telegram_command_menu(self) -> str | None:
         if not hasattr(self.bot, "set_my_commands"):
@@ -289,6 +298,14 @@ class TelegramBridge(
 
         if not self.access.can_receive_message(chat_id=chat_id, user_id=user_id):
             await self._handle_unpaired_or_unauthorized_user(chat_id, user_id, username, command)
+            return
+
+        if self.app_server_state != "ready" and _command_requires_ready_app_server(command):
+            await self._send_user_notice(
+                chat_id,
+                "app_server_reconnecting",
+                "Codex is reconnecting. I'll keep this chat active.",
+            )
             return
 
         if command.kind == TelegramCommandKind.MESSAGE and await self._handle_pending_user_input_message(
@@ -387,18 +404,25 @@ class TelegramBridge(
         context = self.turns.get(turn_id or "")
         if context is None:
             return
+        context.last_event_at = self.access.now_fn()
 
         if event.method == "item/agentMessage/delta":
-            context.final_text += str(event.params.get("delta") or "")
+            delta = str(event.params.get("delta") or "")
+            if delta:
+                self._record_turn_progress(context, "assistant_delta")
+                context.final_text += delta
             return
         if event.method == "item/started":
+            self._record_turn_progress(context, "item_started")
             return
         if event.method == "turn/plan/updated":
             text = _format_turn_plan(event.params)
             if text:
+                self._record_turn_progress(context, "turn_plan_updated")
                 await self._send_or_update_plan(context, text)
             return
         if event.method == "item/completed":
+            self._record_turn_progress(context, "item_completed")
             item = _item(event.params)
             await self._send_output_attachment(context, item)
             plan_text = _plan_item_text(item)
@@ -410,16 +434,26 @@ class TelegramBridge(
                 context.final_text = text
             return
         if "commandExecution/started" in event.method:
+            self._record_turn_progress(context, "command_started", background_activity=True)
             return
         if "commandExecution/completed" in event.method:
+            self._record_turn_progress(context, "command_completed", background_activity=True)
             return
         if "fileChange" in event.method:
+            self._record_turn_progress(context, "file_change")
             return
         if event.method == "turn/completed":
             self._stop_typing_indicator(context.turn_id)
             context.completed = True
             turn = event.params.get("turn") if isinstance(event.params.get("turn"), dict) else {}
             status = str(turn.get("status") or event.params.get("status") or "completed")
+            self._record_turn_progress(
+                context,
+                "turn_completed",
+                terminal=True,
+                interrupted=status == "interrupted",
+                waiting_on_user=False,
+            )
             if status == "failed":
                 error = turn.get("error") if isinstance(turn.get("error"), dict) else {}
                 message = error.get("message") if isinstance(error, dict) else None
@@ -765,50 +799,252 @@ async def run_telegram_bridge() -> None:
     store = TelegramStateStore(settings.state_dir)
     access = AccessManager(store, allowed_user_id=settings.allowed_user_id)
     bot = TelegramBotAPI(settings.bot_token)
-    process_manager: AppServerProcessManager | None = None
-    if settings.app_server_transport == "websocket":
-        process_manager = AppServerProcessManager(
-            codex_bin=settings.codex_bin,
-            url=settings.app_server_url,
-        )
-        await process_manager.start()
-        transport = WebSocketJsonRpcTransport(process_manager.url)
-        await transport.start()
-        app_server = AppServerClient(transport=transport)
-    elif settings.app_server_transport == "stdio":
-        app_server = AppServerClient(command=settings.app_server_command)
-    else:
-        raise SystemExit("CODEX_GATEWAY_APP_SERVER_TRANSPORT must be websocket or stdio.")
-    bridge = TelegramBridge(settings, store, access, bot, app_server)
-    app_server.on_notification = bridge.handle_app_event
-    app_server.on_request = bridge.handle_app_server_request
-    await app_server.start()
+    runtime = await _create_app_server_runtime(settings)
+    bridge = TelegramBridge(settings, store, access, bot, runtime.client)
+    _wire_app_server(runtime.client, bridge)
+    await runtime.client.start()
     try:
         sync_error = await bridge.sync_telegram_command_menu()
         if sync_error:
             print(f"Warning: Telegram command menu sync failed: {sync_error}", file=sys.stderr)
-        offset: int | None = initial_poll_offset(store)
-        polling_state = TelegramPollingState(latest_offset=offset)
-        while True:
-            updates = await get_updates_with_retry(
-                bot,
-                offset=offset,
-                timeout=settings.poll_timeout_seconds,
-                state=polling_state,
-            )
-            for update in updates:
-                update_id = update.get("update_id")
-                if isinstance(update_id, int):
-                    offset = update_id + 1
-                    polling_state.latest_offset = offset
-                await bridge.handle_update(update)
+        async with asyncio.TaskGroup() as task_group:
+            task_group.create_task(_telegram_polling_service(settings, store, bot, bridge))
+            task_group.create_task(_app_server_supervisor(settings, bridge, runtime))
     finally:
         bridge.stop_typing_indicators()
         bridge.stop_background_tasks()
-        await app_server.stop()
-        if process_manager is not None:
-            await process_manager.stop()
+        await _stop_app_server_runtime(runtime)
         await bot.aclose()
+
+
+async def _create_app_server_runtime(settings: TelegramSettings) -> AppServerRuntime:
+    if settings.app_server_transport == "websocket":
+        process_manager = AppServerProcessManager(
+            codex_bin=settings.codex_bin,
+            url=settings.app_server_url,
+            ready_timeout_seconds=30,
+        )
+        try:
+            await process_manager.start()
+            transport = WebSocketJsonRpcTransport(process_manager.url, open_timeout_seconds=10)
+            await transport.start()
+        except Exception:
+            await process_manager.stop()
+            raise
+        return AppServerRuntime(client=AppServerClient(transport=transport), process_manager=process_manager)
+    if settings.app_server_transport == "stdio":
+        return AppServerRuntime(client=AppServerClient(command=settings.app_server_command))
+    raise SystemExit("CODEX_GATEWAY_APP_SERVER_TRANSPORT must be websocket or stdio.")
+
+
+def _wire_app_server(app_server: AppServerClient, bridge: TelegramBridge) -> None:
+    app_server.on_notification = bridge.handle_app_event
+    app_server.on_request = bridge.handle_app_server_request
+
+
+async def _telegram_polling_service(
+    settings: TelegramSettings,
+    store: TelegramStateStore,
+    bot: Any,
+    bridge: TelegramBridge,
+) -> None:
+    offset: int | None = initial_poll_offset(store)
+    polling_state = TelegramPollingState(latest_offset=offset)
+    while True:
+        updates = await get_updates_with_retry(
+            bot,
+            offset=offset,
+            timeout=settings.poll_timeout_seconds,
+            state=polling_state,
+        )
+        for update in updates:
+            update_id = update.get("update_id")
+            await handle_update_with_recovery(
+                bridge,
+                update,
+                timeout_seconds=TELEGRAM_UPDATE_HANDLE_TIMEOUT_SECONDS,
+            )
+            if isinstance(update_id, int):
+                offset = update_id + 1
+                polling_state.latest_offset = offset
+
+
+async def _app_server_supervisor(
+    settings: TelegramSettings,
+    bridge: TelegramBridge,
+    runtime: AppServerRuntime,
+) -> None:
+    while True:
+        await runtime.client.wait_reader_stopped()
+        bridge.app_server_state = "reconnecting"
+        await _notify_app_server_state(
+            bridge,
+            "app_server_reconnecting",
+            "Codex is reconnecting. I'll keep this chat active.",
+        )
+        await _stop_app_server_runtime(runtime)
+        for delay in _supervisor_backoff_seconds():
+            replacement: AppServerRuntime | None = None
+            try:
+                replacement = await _create_app_server_runtime(settings)
+                _wire_app_server(replacement.client, bridge)
+                await replacement.client.start()
+            except asyncio.CancelledError:
+                if replacement is not None:
+                    await _stop_app_server_runtime(replacement)
+                raise
+            except Exception:
+                LOGGER.exception("Failed to restart Codex app-server")
+                if replacement is not None:
+                    await _stop_app_server_runtime(replacement)
+                await asyncio.sleep(delay)
+                continue
+            runtime.client = replacement.client
+            runtime.process_manager = replacement.process_manager
+            bridge.app_server = replacement.client
+            bridge.resumed_thread_ids.clear()
+            bridge.app_server_state = "ready"
+            await _notify_app_server_state(
+                bridge,
+                "app_server_reconnected",
+                "Reconnected to Codex. Checking the current turn.",
+            )
+            await _reconcile_active_turns_after_reconnect(bridge)
+            break
+
+
+async def _stop_app_server_runtime(runtime: AppServerRuntime) -> None:
+    await runtime.client.stop()
+    if runtime.process_manager is not None:
+        await runtime.process_manager.stop()
+        runtime.process_manager = None
+
+
+async def _notify_app_server_state(
+    bridge: TelegramBridge,
+    notice_type: str,
+    message: str,
+) -> None:
+    for chat_id in _affected_chat_ids(bridge):
+        await bridge._send_user_notice(chat_id, notice_type, message)
+
+
+def _affected_chat_ids(bridge: TelegramBridge) -> list[str]:
+    chat_ids = {context.chat_id for context in bridge.turns.values() if not context.completed}
+    for key in bridge.store.load_chats():
+        if key.startswith("chat_id:"):
+            chat_ids.add(key.removeprefix("chat_id:"))
+    return sorted(chat_ids)
+
+
+async def _reconcile_active_turns_after_reconnect(bridge: TelegramBridge) -> None:
+    for context in list(bridge.turns.values()):
+        if context.completed:
+            continue
+        try:
+            await bridge._recover_completed_active_turn_context(context, notify=True)
+        except Exception:
+            LOGGER.exception(
+                "Failed to reconcile active turn after app-server reconnect",
+                extra={"chat_id": context.chat_id, "thread_id": context.thread_id, "turn_id": context.turn_id},
+            )
+
+
+def _supervisor_backoff_seconds() -> tuple[float, ...]:
+    return (0.5, 1.0, 2.0, 5.0, 10.0, 30.0)
+
+
+async def handle_update_with_recovery(
+    bridge: TelegramBridge,
+    update: dict[str, Any],
+    *,
+    timeout_seconds: float = TELEGRAM_UPDATE_HANDLE_TIMEOUT_SECONDS,
+) -> bool:
+    chat_id = _chat_id_from_update(update)
+    update_id = update.get("update_id")
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            await bridge.handle_update(update)
+        return True
+    except TimeoutError:
+        LOGGER.warning(
+            "Telegram update handling timed out",
+            extra={"chat_id": chat_id, "update_id": update_id, "timeout_kind": "telegram_update"},
+        )
+        if chat_id is not None:
+            await bridge._send_user_notice(
+                chat_id,
+                "action_timeout",
+                "Codex did not respond in time. Please try again in a moment.",
+            )
+            bridge._record_last_update(chat_id, update_id)
+    except TelegramAPIError as exc:
+        LOGGER.warning(
+            "Telegram API error while handling update",
+            extra={"chat_id": chat_id, "update_id": update_id, "dead_letter_reason": str(exc)},
+        )
+        if chat_id is not None:
+            if exc.ambiguous_delivery:
+                await bridge._send_user_notice(
+                    chat_id,
+                    "telegram_delivery_uncertain",
+                    "Telegram delivery is uncertain, so I won't resend automatically.",
+                )
+            else:
+                await bridge._send_user_notice(
+                    chat_id,
+                    "action_failed",
+                    "Codex did not respond in time. Please try again in a moment.",
+                )
+            bridge._record_last_update(chat_id, update_id)
+    except JsonRpcError as exc:
+        LOGGER.warning(
+            "App-server error while handling Telegram update",
+            extra={"chat_id": chat_id, "update_id": update_id, "dead_letter_reason": str(exc)},
+        )
+        if chat_id is not None:
+            await bridge._send_user_notice(
+                chat_id,
+                "action_failed",
+                "Codex did not respond in time. Please try again in a moment.",
+            )
+            bridge._record_last_update(chat_id, update_id)
+    except Exception:
+        LOGGER.exception(
+            "Unexpected error while handling Telegram update",
+            extra={"chat_id": chat_id, "update_id": update_id},
+        )
+        if chat_id is not None:
+            await bridge._send_user_notice(
+                chat_id,
+                "action_failed",
+                "Codex did not respond in time. Please try again in a moment.",
+            )
+            bridge._record_last_update(chat_id, update_id)
+    return False
+
+
+def _chat_id_from_update(update: dict[str, Any]) -> str | None:
+    message = update.get("message")
+    if isinstance(message, dict):
+        chat_id = (message.get("chat") or {}).get("id")
+        return str(chat_id) if chat_id is not None else None
+    callback = update.get("callback_query")
+    if isinstance(callback, dict):
+        callback_message = callback.get("message")
+        if isinstance(callback_message, dict):
+            chat_id = (callback_message.get("chat") or {}).get("id")
+            return str(chat_id) if chat_id is not None else None
+    return None
+
+
+def _command_requires_ready_app_server(command: TelegramCommand) -> bool:
+    return command.kind in {
+        TelegramCommandKind.MESSAGE,
+        TelegramCommandKind.THREAD,
+        TelegramCommandKind.APP_SERVER,
+        TelegramCommandKind.CODEX_TURN,
+    }
 
 
 async def get_updates_with_retry(

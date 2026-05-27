@@ -155,6 +155,7 @@ from .constants import (
     _AUTH_HEADER_PATTERN,
     _SECRET_PATTERNS,
     TYPING_ACTION_INTERVAL_SECONDS,
+    USER_NOTICE_RATE_LIMIT_SECONDS,
     AUTO_THREAD_TITLE_MAX_CHARS,
     APPROVAL_POLICY_CHOICES,
     EFFORT_CHOICES,
@@ -183,6 +184,33 @@ LOGGER = logging.getLogger(__name__)
 
 
 class TelegramBridgeIOMixin:
+    def _record_turn_progress(
+        self,
+        context: TurnContext,
+        kind: str,
+        *,
+        waiting_on_user: bool | None = None,
+        waiting_prompt_type: str | None = None,
+        background_activity: bool = False,
+        terminal: bool = False,
+        interrupted: bool = False,
+    ) -> None:
+        now = self.access.now_fn()
+        context.last_event_at = now
+        context.last_progress_at = now
+        context.last_progress_kind = kind
+        if waiting_on_user is not None:
+            context.waiting_on_user = waiting_on_user
+            context.waiting_prompt_type = waiting_prompt_type if waiting_on_user else None
+        if background_activity:
+            context.background_activity_seen = True
+        if terminal:
+            context.terminal_seen = True
+            context.completed_at = now
+        if interrupted:
+            context.interrupted_at = now
+
+
     def _context_for_event(self, event: AppServerEvent) -> TurnContext | None:
         turn_id = _turn_id(event.params)
         if turn_id and turn_id in self.turns:
@@ -234,6 +262,28 @@ class TelegramBridgeIOMixin:
             if message_id is not None:
                 self.track_bridge_message(chat_id, int(message_id))
         return sent
+
+
+    async def _send_user_notice(
+        self,
+        chat_id: str | int,
+        notice_type: str,
+        text: str,
+        *,
+        min_interval_seconds: float = USER_NOTICE_RATE_LIMIT_SECONDS,
+    ) -> bool:
+        now = self.access.now_fn()
+        key = (str(chat_id), notice_type)
+        last_sent = self.user_notice_times.get(key)
+        if last_sent is not None and (now - last_sent).total_seconds() < min_interval_seconds:
+            return False
+        self.user_notice_times[key] = now
+        try:
+            await self._send(chat_id, text)
+        except Exception:
+            LOGGER.exception("Failed to send Telegram user notice", extra={"chat_id": str(chat_id), "notice_type": notice_type})
+            return False
+        return True
 
 
     async def _send_document(
@@ -536,10 +586,21 @@ class TelegramBridgeIOMixin:
 
 
     def _resume_typing_for_pending_record(self, record: dict[str, Any]) -> None:
+        self._mark_pending_record_answered(record, resume_typing=True)
+
+
+    def _mark_pending_record_answered(
+        self,
+        record: dict[str, Any],
+        *,
+        resume_typing: bool = False,
+    ) -> None:
         context = self.turns.get(str(record.get("turn_id") or ""))
         if context is None or context.completed:
             return
-        self._start_typing_indicator(context)
+        self._record_turn_progress(context, "user_prompt_answered", waiting_on_user=False)
+        if resume_typing:
+            self._start_typing_indicator(context)
 
 
     def _stop_typing_indicator(self, turn_id: str) -> None:

@@ -11,6 +11,10 @@ from typing import Any, Awaitable, Callable
 
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_APP_SERVER_RPC_TIMEOUT_SECONDS = 30.0
+DEFAULT_APP_SERVER_HANDLER_TIMEOUT_SECONDS = 150.0
+DEFAULT_APP_SERVER_NOTIFICATION_QUEUE_SIZE = 512
+JSON_RPC_TIMEOUT_CODE = -32002
 
 
 class JsonRpcError(RuntimeError):
@@ -91,15 +95,26 @@ class AppServerClient:
         on_notification: NotificationHandler | None = None,
         on_request: NotificationHandler | None = None,
         retry_delay_seconds: float = 0.25,
+        request_timeout_seconds: float | None = DEFAULT_APP_SERVER_RPC_TIMEOUT_SECONDS,
+        send_timeout_seconds: float | None = DEFAULT_APP_SERVER_RPC_TIMEOUT_SECONDS,
+        server_request_timeout_seconds: float | None = DEFAULT_APP_SERVER_HANDLER_TIMEOUT_SECONDS,
+        notification_queue_size: int = DEFAULT_APP_SERVER_NOTIFICATION_QUEUE_SIZE,
     ) -> None:
         self.transport = transport
         self.command = _normalize_command(command) if command is not None else None
         self.on_notification = on_notification
         self.on_request = on_request
         self.retry_delay_seconds = retry_delay_seconds
+        self.request_timeout_seconds = request_timeout_seconds
+        self.send_timeout_seconds = send_timeout_seconds
+        self.server_request_timeout_seconds = server_request_timeout_seconds
+        self.notification_queue_size = notification_queue_size
         self._next_id = 1
         self._pending: dict[int | str, asyncio.Future[Any]] = {}
         self._reader_task: asyncio.Task[None] | None = None
+        self._notification_queue: asyncio.Queue[AppServerEvent] | None = None
+        self._notification_task: asyncio.Task[None] | None = None
+        self._handler_tasks: set[asyncio.Task[Any]] = set()
 
     async def start(self) -> None:
         if self.transport is None:
@@ -115,16 +130,36 @@ class AppServerClient:
             raise JsonRpcError("Transport is required")
         if self._reader_task is None or self._reader_task.done():
             self._reader_task = asyncio.create_task(self._read_loop())
+        if self._notification_task is None or self._notification_task.done():
+            queue_size = max(1, int(self.notification_queue_size))
+            self._notification_queue = asyncio.Queue(maxsize=queue_size)
+            self._notification_task = asyncio.create_task(self._notification_dispatch_loop())
 
     async def stop(self) -> None:
+        self._fail_pending(JsonRpcError("App-server client stopped"))
         if self._reader_task is not None:
             self._reader_task.cancel()
             try:
                 await self._reader_task
             except asyncio.CancelledError:
                 pass
+        if self._notification_task is not None:
+            self._notification_task.cancel()
+            try:
+                await self._notification_task
+            except asyncio.CancelledError:
+                pass
+        for task in list(self._handler_tasks):
+            task.cancel()
+        if self._handler_tasks:
+            await asyncio.gather(*self._handler_tasks, return_exceptions=True)
         if self.transport is not None:
             await self.transport.close()
+
+    async def wait_reader_stopped(self) -> None:
+        task = self._reader_task
+        if task is not None:
+            await task
 
     async def initialize(self) -> Any:
         result = await self.request(
@@ -541,11 +576,17 @@ class AppServerClient:
             params["cwd"] = cwd
         return await self.request("config/read", params)
 
-    async def request(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    async def request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> Any:
         attempts = 0
         while True:
             try:
-                return await self._request_once(method, params)
+                return await self._request_with_timeout(method, params, timeout_seconds=timeout_seconds)
             except JsonRpcError as exc:
                 if exc.code == -32001 and attempts == 0:
                     attempts += 1
@@ -553,6 +594,26 @@ class AppServerClient:
                         await asyncio.sleep(self.retry_delay_seconds)
                     continue
                 raise
+
+    async def _request_with_timeout(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> Any:
+        timeout = self.request_timeout_seconds if timeout_seconds is None else timeout_seconds
+        if timeout is None or timeout <= 0:
+            return await self._request_once(method, params)
+        try:
+            async with asyncio.timeout(timeout):
+                return await self._request_once(method, params)
+        except TimeoutError as exc:
+            raise JsonRpcError(
+                f"App-server request timed out after {timeout:g}s: {method}",
+                code=JSON_RPC_TIMEOUT_CODE,
+                data={"method": method, "timeoutSeconds": timeout},
+            ) from exc
 
     async def _request_once(self, method: str, params: dict[str, Any] | None = None) -> Any:
         if self.transport is None:
@@ -571,12 +632,12 @@ class AppServerClient:
                     "params": params or {},
                 }
             )
-        except Exception:
-            self._pending.pop(request_id, None)
-            raise
-        try:
             return await future
         except asyncio.CancelledError:
+            self._pending.pop(request_id, None)
+            future.cancel()
+            raise
+        except Exception:
             self._pending.pop(request_id, None)
             future.cancel()
             raise
@@ -646,9 +707,16 @@ class AppServerClient:
         if self.transport is None:
             raise JsonRpcError("Transport is required")
         try:
-            await self.transport.send(message)
+            if self.send_timeout_seconds is None or self.send_timeout_seconds <= 0:
+                await self.transport.send(message)
+            else:
+                await asyncio.wait_for(self.transport.send(message), timeout=self.send_timeout_seconds)
         except JsonRpcError:
             raise
+        except asyncio.TimeoutError as exc:
+            raise JsonRpcError(
+                f"App-server transport send timed out after {self.send_timeout_seconds:g}s"
+            ) from exc
         except Exception as exc:
             detail = str(exc) or exc.__class__.__name__
             raise JsonRpcError(f"App-server transport send failed: {detail}") from exc
@@ -692,20 +760,76 @@ class AppServerClient:
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
         event = AppServerEvent(method=method, params=params, request_id=message.get("id"))
         if "id" in message:
-            try:
-                await _maybe_await(self.on_request, event)
-            except Exception as exc:
-                LOGGER.exception("App-server request handler failed for %s", method)
-                try:
-                    request_id = event.request_id if event.request_id is not None else message["id"]
-                    await self.send_error_response(request_id, str(exc))
-                except Exception:
-                    LOGGER.exception("Failed to send app-server error response for %s", method)
+            self._track_handler_task(self._run_request_handler(event, message["id"]))
         else:
+            self._queue_notification(event)
+
+    def _queue_notification(self, event: AppServerEvent) -> None:
+        queue = self._notification_queue
+        if queue is None:
+            self._track_handler_task(self._run_notification_handler(event))
+            return
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            if _must_deliver_notification(event.method):
+                LOGGER.error(
+                    "App-server notification queue full; dispatching required event outside queue: %s",
+                    event.method,
+                )
+                self._track_handler_task(self._run_notification_handler(event))
+                return
+            LOGGER.warning("Dropped low-priority app-server notification under pressure: %s", event.method)
+
+    async def _notification_dispatch_loop(self) -> None:
+        queue = self._notification_queue
+        if queue is None:
+            return
+        while True:
+            event = await queue.get()
             try:
-                await _maybe_await(self.on_notification, event)
+                await self._run_notification_handler(event)
+            finally:
+                queue.task_done()
+
+    async def _run_notification_handler(self, event: AppServerEvent) -> None:
+        try:
+            await _maybe_await(self.on_notification, event)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception("App-server notification handler failed for %s", event.method)
+
+    async def _run_request_handler(self, event: AppServerEvent, fallback_request_id: int | str) -> None:
+        try:
+            if self.server_request_timeout_seconds is None or self.server_request_timeout_seconds <= 0:
+                await _maybe_await(self.on_request, event)
+            else:
+                async with asyncio.timeout(self.server_request_timeout_seconds):
+                    await _maybe_await(self.on_request, event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.exception("App-server request handler failed for %s", event.method)
+            try:
+                request_id = event.request_id if event.request_id is not None else fallback_request_id
+                await self.send_error_response(request_id, str(exc))
             except Exception:
-                LOGGER.exception("App-server notification handler failed for %s", method)
+                LOGGER.exception("Failed to send app-server error response for %s", event.method)
+
+    def _track_handler_task(self, awaitable: Awaitable[Any]) -> None:
+        task = asyncio.create_task(awaitable)
+        self._handler_tasks.add(task)
+        task.add_done_callback(self._finish_handler_task)
+
+    def _finish_handler_task(self, task: asyncio.Task[Any]) -> None:
+        self._handler_tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception:
+            LOGGER.exception("App-server handler task failed")
 
     def _fail_pending(self, exc: Exception) -> None:
         pending = list(self._pending.values())
@@ -749,3 +873,14 @@ def _tool_result_item(item: dict[str, Any]) -> dict[str, Any]:
     if item.get("type") == "text":
         return {"type": "inputText", "text": str(item.get("text") or "")}
     return item
+
+
+def _must_deliver_notification(method: str) -> bool:
+    return (
+        method == "turn/completed"
+        or method.endswith("/request")
+        or method.endswith("/completed")
+        or "requestApproval" in method
+        or "requestUserInput" in method
+        or "elicitation/request" in method
+    )

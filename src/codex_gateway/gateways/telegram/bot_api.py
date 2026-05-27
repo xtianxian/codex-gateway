@@ -9,6 +9,8 @@ import httpx
 
 
 MAX_TELEGRAM_TEXT = 3500
+TELEGRAM_IO_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
+TELEGRAM_MEDIA_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=120.0, pool=10.0)
 
 
 class TelegramAPIError(RuntimeError):
@@ -28,7 +30,7 @@ class TelegramBotAPI:
         self.token = token
         self.base_url = base_url.rstrip("/")
         self._owns_client = client is None
-        self.client = client or httpx.AsyncClient(base_url=self.base_url)
+        self.client = client or httpx.AsyncClient(base_url=self.base_url, timeout=TELEGRAM_IO_TIMEOUT)
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -38,7 +40,7 @@ class TelegramBotAPI:
         if not self._owns_client:
             return False
         old_client = self.client
-        self.client = httpx.AsyncClient(base_url=self.base_url)
+        self.client = httpx.AsyncClient(base_url=self.base_url, timeout=TELEGRAM_IO_TIMEOUT)
         await old_client.aclose()
         return True
 
@@ -493,7 +495,7 @@ class TelegramBotAPI:
     async def download_file(self, file_path: str) -> bytes:
         url = f"{self.base_url}/file/bot{self.token}/{file_path.lstrip('/')}"
         try:
-            response = await self.client.get(url)
+            response = await self.client.get(url, timeout=TELEGRAM_MEDIA_TIMEOUT)
         except httpx.HTTPError as exc:
             raise TelegramAPIError(self._redact(f"Telegram file download failed: {exc}")) from exc
         if response.status_code >= 400:
@@ -524,13 +526,14 @@ class TelegramBotAPI:
         ambiguous_delivery_on_timeout: bool = False,
     ) -> Any:
         url = f"{self.base_url}/bot{self.token}/{method}"
+        request_timeout = timeout if timeout is not None else TELEGRAM_IO_TIMEOUT
         try:
-            response = await self.client.post(url, json=payload, timeout=timeout)
+            response = await self.client.post(url, json=payload, timeout=request_timeout)
         except httpx.HTTPError as exc:
             detail = str(exc) or exc.__class__.__name__
             raise TelegramAPIError(
                 self._redact(f"Telegram API {method} failed: {detail}"),
-                ambiguous_delivery=ambiguous_delivery_on_timeout and isinstance(exc, httpx.ReadTimeout),
+                ambiguous_delivery=ambiguous_delivery_on_timeout and _is_ambiguous_delivery_timeout(exc),
             ) from exc
         body_text = response.text
         try:
@@ -601,12 +604,17 @@ class TelegramBotAPI:
         url = f"{self.base_url}/bot{self.token}/{method}"
         form_data = {key: _multipart_value(value) for key, value in data.items() if value is not None}
         try:
-            response = await self.client.post(url, data=form_data, files=files)
+            response = await self.client.post(
+                url,
+                data=form_data,
+                files=files,
+                timeout=TELEGRAM_MEDIA_TIMEOUT,
+            )
         except httpx.HTTPError as exc:
             detail = str(exc) or exc.__class__.__name__
             raise TelegramAPIError(
                 self._redact(f"Telegram API {method} failed: {detail}"),
-                ambiguous_delivery=isinstance(exc, httpx.ReadTimeout),
+                ambiguous_delivery=_is_ambiguous_delivery_timeout(exc),
             ) from exc
         body_text = response.text
         try:
@@ -638,3 +646,7 @@ def _multipart_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def _is_ambiguous_delivery_timeout(exc: httpx.HTTPError) -> bool:
+    return isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout))

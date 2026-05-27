@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
 
 @dataclass
 class TurnContext:
@@ -24,6 +30,19 @@ class TurnContext:
     attachments: dict[str, dict[str, Any]] = field(default_factory=dict)
     output_attachments_sent: set[str] = field(default_factory=set)
     ambiguous_tool_sends: set[str] = field(default_factory=set)
+    started_at: datetime = field(default_factory=_utc_now)
+    last_event_at: datetime = field(default_factory=_utc_now)
+    last_progress_at: datetime = field(default_factory=_utc_now)
+    last_progress_kind: str = "turn_started"
+    waiting_on_user: bool = False
+    waiting_prompt_type: str | None = None
+    background_activity_seen: bool = False
+    terminal_seen: bool = False
+    completed_at: datetime | None = None
+    interrupted_at: datetime | None = None
+    reconcile_attempts: int = 0
+    last_reconcile_at: datetime | None = None
+    last_user_status_notice_at: datetime | None = None
 
 
 @dataclass(frozen=True)

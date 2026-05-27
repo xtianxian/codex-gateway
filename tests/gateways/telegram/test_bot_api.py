@@ -59,6 +59,22 @@ async def test_multipart_send_read_timeout_marks_delivery_ambiguous() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_write_timeout_marks_delivery_ambiguous() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.WriteTimeout("", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.telegram.org")
+    api = TelegramBotAPI("test-token", client=client)
+
+    with pytest.raises(TelegramAPIError) as exc_info:
+        await api.send_message(42, "hello")
+
+    assert "WriteTimeout" in str(exc_info.value)
+    assert exc_info.value.ambiguous_delivery is True
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_owned_client_recreation_closes_and_replaces_client() -> None:
     api = TelegramBotAPI("test-token")
     old_client = api.client
@@ -112,6 +128,10 @@ async def test_send_message_options_use_valid_bot_api_payload() -> None:
 
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/bottest-token/sendMessage"
+        assert request.extensions["timeout"]["connect"] == 10
+        assert request.extensions["timeout"]["read"] == 30
+        assert request.extensions["timeout"]["write"] == 30
+        assert request.extensions["timeout"]["pool"] == 10
         requests.append(json.loads(request.content))
         return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
 
@@ -241,6 +261,8 @@ async def test_get_file_and_download_file_use_correct_urls() -> None:
                 json={"ok": True, "result": {"file_id": "f1", "file_path": "docs/a.txt"}},
             )
         assert request.url.path == "/file/bottest-token/docs/a.txt"
+        assert request.extensions["timeout"]["read"] == 120
+        assert request.extensions["timeout"]["write"] == 120
         return httpx.Response(200, content=b"contents")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.telegram.org")
@@ -259,6 +281,8 @@ async def test_send_document_uses_guessed_fallback_and_explicit_content_types() 
 
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/bottest-token/sendDocument"
+        assert request.extensions["timeout"]["read"] == 120
+        assert request.extensions["timeout"]["write"] == 120
         bodies.append(request.content)
         return httpx.Response(200, json={"ok": True, "result": {"document": {"file_id": f"doc-{len(bodies)}"}}})
 

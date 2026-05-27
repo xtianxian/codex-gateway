@@ -99,19 +99,31 @@ async def test_json_rpc_error_response_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_notifications_and_server_requests_are_dispatched() -> None:
+    notification_seen = asyncio.Event()
+    request_seen = asyncio.Event()
     notifications: list[AppServerEvent] = []
     requests: list[AppServerEvent] = []
+
+    def record_notification(event: AppServerEvent) -> None:
+        notifications.append(event)
+        notification_seen.set()
+
+    def record_request(event: AppServerEvent) -> None:
+        requests.append(event)
+        request_seen.set()
+
     transport = FakeTransport()
     client = AppServerClient(
         transport=transport,
-        on_notification=notifications.append,
-        on_request=requests.append,
+        on_notification=record_notification,
+        on_request=record_request,
     )
     await client.start_reader()
 
     await transport.incoming.put({"method": "turn/completed", "params": {"turn": {"id": "t1"}}})
     await transport.incoming.put({"id": 99, "method": "item/tool/call", "params": {"tool": "telegram_reply"}})
-    await asyncio.sleep(0)
+    await asyncio.wait_for(notification_seen.wait(), timeout=1)
+    await asyncio.wait_for(request_seen.wait(), timeout=1)
 
     assert notifications[0].method == "turn/completed"
     assert requests[0].request_id == 99
@@ -132,9 +144,55 @@ async def test_notification_handler_failure_does_not_stop_reader() -> None:
     await transport.incoming.put({"method": "item/completed", "params": {"turnId": "turn_1"}})
     await asyncio.sleep(0)
 
-    pending = asyncio.create_task(client.request("thread/read", {"threadId": "thr_1"}))
+    pending = asyncio.create_task(client.request("thread/read", {"threadId": "thr_1"}, timeout_seconds=1))
     await asyncio.sleep(0)
     await transport.incoming.put({"id": 1, "result": {"thread": {"id": "thr_1"}}})
+
+    assert await asyncio.wait_for(pending, timeout=1) == {"thread": {"id": "thr_1"}}
+
+    await client.stop()
+
+
+@pytest.mark.asyncio
+async def test_notification_handler_does_not_block_response_reader() -> None:
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+
+    async def slow_notification(_event: AppServerEvent) -> None:
+        handler_started.set()
+        await release_handler.wait()
+
+    transport = FakeTransport()
+    client = AppServerClient(transport=transport, on_notification=slow_notification)
+    await client.start_reader()
+
+    await transport.incoming.put({"method": "item/completed", "params": {"turnId": "turn_1"}})
+    await asyncio.wait_for(handler_started.wait(), timeout=1)
+
+    pending = asyncio.create_task(client.request("thread/read", {"threadId": "thr_1"}, timeout_seconds=1))
+    await asyncio.sleep(0)
+    await transport.incoming.put({"id": 1, "result": {"thread": {"id": "thr_1"}}})
+
+    assert await asyncio.wait_for(pending, timeout=1) == {"thread": {"id": "thr_1"}}
+
+    release_handler.set()
+    await client.stop()
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_removes_pending_future_and_reader_continues() -> None:
+    transport = FakeTransport()
+    client = AppServerClient(transport=transport, request_timeout_seconds=0.01)
+    await client.start_reader()
+
+    with pytest.raises(JsonRpcError, match="timed out"):
+        await client.request("model/list", {})
+
+    assert client._pending == {}
+
+    pending = asyncio.create_task(client.request("thread/read", {"threadId": "thr_1"}, timeout_seconds=1))
+    await asyncio.sleep(0)
+    await transport.incoming.put({"id": 2, "result": {"thread": {"id": "thr_1"}}})
 
     assert await asyncio.wait_for(pending, timeout=1) == {"thread": {"id": "thr_1"}}
 
@@ -151,7 +209,10 @@ async def test_server_request_handler_failure_sends_error_and_reader_continues()
     await client.start_reader()
 
     await transport.incoming.put({"id": 99, "method": "item/tool/call", "params": {"turnId": "turn_1"}})
-    await asyncio.sleep(0)
+    for _ in range(10):
+        if transport.sent:
+            break
+        await asyncio.sleep(0)
 
     assert transport.sent[0]["id"] == 99
     assert transport.sent[0]["error"]["message"] == "request failed"

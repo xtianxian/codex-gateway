@@ -18,6 +18,7 @@ from codex_gateway.gateways.telegram.bridge import (
     TELEGRAM_GATEWAY_DEVELOPER_INSTRUCTIONS,
     TelegramBridge,
     _dynamic_tools_fingerprint,
+    handle_update_with_recovery,
     telegram_dynamic_tools,
 )
 from codex_gateway.gateways.telegram.commands import (
@@ -1132,12 +1133,19 @@ async def test_stale_active_turn_is_recovered_before_rejecting_message(tmp_path:
     app_server.thread_read = read_completed_thread
 
     await bridge.handle_update(message_update("first turn"))
+    context = bridge._active_turn_context("42")
+    assert context is not None
+    context.last_progress_at = access.now_fn() - timedelta(seconds=301)
     await bridge.handle_update(message_update("second turn", message_id=11))
 
     assert bridge.turns["turn_1"].completed is True
     assert len(app_server.turn_starts) == 2
     assert app_server.turn_starts[-1]["input_items"] == [{"type": "text", "text": "second turn"}]
     assert not any("A Codex turn is already active" in message["text"] for message in bot.messages)
+    assert [message["text"] for message in bot.messages] == [
+        "This turn has not shown progress recently. Checking its status.",
+        "Recovered the completed turn state. You can send the next message.",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -2382,6 +2390,132 @@ async def test_cancel_and_steer_use_active_in_memory_turn(tmp_path: Path) -> Non
     assert app_server.turn_interrupts == [{"thread_id": "thr_1", "turn_id": "turn_1"}]
     assert bot.messages[-2]["text"] == "Steer request sent."
     assert bot.messages[-1]["text"] == "Cancel requested."
+
+
+@pytest.mark.asyncio
+async def test_active_turn_disabled_command_does_not_thread_read_before_stale(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="gatewayuser", source="cli")
+
+    await bridge.handle_update(message_update("start a long turn"))
+    await bridge.handle_update(message_update("/model", message_id=11))
+
+    assert app_server.thread_reads == []
+    assert bot.messages[-1]["text"] == "/model is disabled while a task is in progress. Use /steer <text> or /cancel."
+
+
+@pytest.mark.asyncio
+async def test_no_progress_turn_sends_one_notice_and_runs_bounded_reconciliation(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="gatewayuser", source="cli")
+    await bridge.handle_update(message_update("start a long turn"))
+    context = bridge._active_turn_context("42")
+    assert context is not None
+    context.last_progress_at = access.now_fn() - timedelta(seconds=301)
+
+    assert await bridge._active_turn_context_or_recover("42") is context
+    first_message_count = len(bot.messages)
+    assert "not shown progress" in bot.messages[-1]["text"]
+    assert app_server.thread_reads == [{"thread_id": "thr_1", "include_turns": True}]
+
+    assert await bridge._active_turn_context_or_recover("42") is context
+    assert len(bot.messages) == first_message_count
+    assert app_server.thread_reads == [{"thread_id": "thr_1", "include_turns": True}]
+
+
+@pytest.mark.asyncio
+async def test_stale_completed_turn_recovery_notifies_once(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="gatewayuser", source="cli")
+    await bridge.handle_update(message_update("start a turn"))
+    context = bridge._active_turn_context("42")
+    assert context is not None
+    context.last_progress_at = access.now_fn() - timedelta(seconds=301)
+
+    async def completed_thread_read(**kwargs: Any) -> dict[str, Any]:
+        app_server.thread_reads.append(kwargs)
+        return {
+            "thread": {
+                "id": kwargs["thread_id"],
+                "status": {"type": "idle"},
+                "turns": [{"id": context.turn_id, "status": "completed"}],
+            }
+        }
+
+    app_server.thread_read = completed_thread_read
+
+    assert await bridge._active_turn_context_or_recover("42") is None
+    assert context.completed is True
+    assert [message["text"] for message in bot.messages] == [
+        "This turn has not shown progress recently. Checking its status.",
+        "Recovered the completed turn state. You can send the next message.",
+    ]
+
+    assert await bridge._active_turn_context_or_recover("42") is None
+    assert len(bot.messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_waiting_approval_is_status_not_stale_reconciled(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="gatewayuser", source="cli")
+    await bridge.handle_update(message_update("needs approval"))
+    await bridge.handle_app_server_request(
+        AppServerEvent(
+            "item/commandExecution/requestApproval",
+            {"turnId": "turn_1", "command": "pytest"},
+            request_id=77,
+        )
+    )
+    context = bridge._active_turn_context("42")
+    assert context is not None
+    context.last_progress_at = access.now_fn() - timedelta(seconds=901)
+
+    assert await bridge._active_turn_context_or_recover("42") is context
+    assert app_server.thread_reads == []
+
+    await bridge.handle_update(message_update("/status", message_id=12))
+    status_text = bot.messages[-1]["text"]
+    assert "Turn state: waiting on approval" in status_text
+    assert "Recovery: use /steer <text> or /cancel." in status_text
+
+
+@pytest.mark.asyncio
+async def test_update_handling_failure_sends_one_notice_and_dead_letters_update(tmp_path: Path) -> None:
+    bridge, bot, _app_server, store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="gatewayuser", source="cli")
+
+    async def fail_update(_update: dict[str, Any]) -> None:
+        raise JsonRpcError("request timed out")
+
+    bridge.handle_update = fail_update  # type: ignore[method-assign]
+
+    update = message_update("hello", message_id=55)
+    assert await handle_update_with_recovery(bridge, update) is False
+    assert await handle_update_with_recovery(bridge, update) is False
+
+    assert [message["text"] for message in bot.messages] == [
+        "Codex did not respond in time. Please try again in a moment."
+    ]
+    assert store.load_chats()["chat_id:42"]["last_update_id"] == 55
+
+
+@pytest.mark.asyncio
+async def test_app_server_reconnecting_state_fails_dependent_updates_fast(tmp_path: Path) -> None:
+    bridge, bot, app_server, _store, access = bridge_for(tmp_path)
+    access.allow_user("123", username="gatewayuser", source="cli")
+    bridge.app_server_state = "reconnecting"
+
+    await bridge.handle_update(message_update("start work"))
+    await bridge.handle_update(message_update("start work again", message_id=11))
+    await bridge.handle_update(message_update("/status", message_id=12))
+
+    assert app_server.turn_starts == []
+    assert [message["text"] for message in bot.messages[:1]] == [
+        "Codex is reconnecting. I'll keep this chat active."
+    ]
+    assert len([message for message in bot.messages if "Codex is reconnecting" in message["text"]]) == 1
+    assert "App-server: reconnecting" in bot.messages[-1]["text"]
 
 
 @pytest.mark.parametrize(

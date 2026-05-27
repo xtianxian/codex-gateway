@@ -284,6 +284,7 @@ class TelegramBridgeRequestMixin:
         context = self._context_for_event(event)
         if context is None or event.request_id is None:
             return
+        self._record_turn_progress(context, event.method, waiting_on_user=True, waiting_prompt_type="approval")
         self._stop_typing_indicator(context.turn_id)
         token = secrets.token_urlsafe(18)
         expires_at = self.access.now_fn() + timedelta(seconds=self.settings.approval_timeout_seconds)
@@ -325,6 +326,12 @@ class TelegramBridgeRequestMixin:
         context = self._context_for_event(event)
         if context is None or event.request_id is None:
             return
+        self._record_turn_progress(
+            context,
+            event.method,
+            waiting_on_user=True,
+            waiting_prompt_type="permissions_approval",
+        )
         self._stop_typing_indicator(context.turn_id)
         token = secrets.token_urlsafe(18)
         expires_at = self.access.now_fn() + timedelta(seconds=self.settings.approval_timeout_seconds)
@@ -367,6 +374,7 @@ class TelegramBridgeRequestMixin:
         context = self._context_for_event(event)
         if context is None or event.request_id is None:
             return
+        self._record_turn_progress(context, event.method, waiting_on_user=True, waiting_prompt_type="elicitation")
         self._stop_typing_indicator(context.turn_id)
         token = secrets.token_urlsafe(18)
         expires_at = self.access.now_fn() + timedelta(seconds=self.settings.approval_timeout_seconds)
@@ -418,6 +426,7 @@ class TelegramBridgeRequestMixin:
                 "Secret user input is not supported over Telegram.",
             )
             return
+        self._record_turn_progress(context, event.method, waiting_on_user=True, waiting_prompt_type="user_input")
         self._stop_typing_indicator(context.turn_id)
         token = secrets.token_urlsafe(18)
         expires_at = self.access.now_fn() + timedelta(seconds=self.settings.approval_timeout_seconds)
@@ -505,6 +514,7 @@ class TelegramBridgeRequestMixin:
         if not self.access.can_answer_callback(chat_id, user_id, token):
             if str(pending.get("chat_id")) == chat_id and str(pending.get("user_id")) == user_id:
                 await self.app_server.send_error_response(pending["request_id"], "Approval expired.")
+                self._mark_pending_record_answered(pending)
                 pending_all.pop(token, None)
                 self.store.save_pending_approvals(pending_all)
                 await self._edit_callback_message(callback, "Approval expired.")
@@ -528,10 +538,13 @@ class TelegramBridgeRequestMixin:
                     pending["request_id"],
                     f"Permission approval {_action_past_tense(action)}.",
                 )
+                self._mark_pending_record_answered(pending)
         else:
             await self.app_server.send_approval_decision(pending["request_id"], action)
             if action == "accept":
                 self._resume_typing_for_pending_record(pending)
+            else:
+                self._mark_pending_record_answered(pending)
         pending_all.pop(token, None)
         self.store.save_pending_approvals(pending_all)
         message = f"Approval {_action_past_tense(action)}."
@@ -561,6 +574,7 @@ class TelegramBridgeRequestMixin:
         expires_at = _parse_iso(str(pending.get("expires_at") or ""))
         if expires_at <= self.access.now_fn():
             await self.app_server.send_error_response(pending["request_id"], "Elicitation expired.")
+            self._mark_pending_record_answered(pending)
             pending_all.pop(token, None)
             self.store.save_pending_elicitations(pending_all)
             await self._edit_callback_message(callback, "Elicitation expired.")
@@ -572,6 +586,8 @@ class TelegramBridgeRequestMixin:
         await self.app_server.send_mcp_elicitation_response(pending["request_id"], action)
         if action == "accept":
             self._resume_typing_for_pending_record(pending)
+        else:
+            self._mark_pending_record_answered(pending)
         pending_all.pop(token, None)
         self.store.save_pending_elicitations(pending_all)
         message = f"Elicitation {_action_past_tense(action)}."
@@ -598,6 +614,7 @@ class TelegramBridgeRequestMixin:
         expires_at = _parse_iso(str(pending.get("expires_at") or ""))
         if expires_at <= self.access.now_fn():
             await self.app_server.send_error_response(pending["request_id"], "User input expired.")
+            self._mark_pending_record_answered(pending)
             pending_all.pop(token, None)
             self.store.save_pending_user_inputs(pending_all)
             await self._edit_callback_message(callback, "User input expired.")
@@ -605,6 +622,7 @@ class TelegramBridgeRequestMixin:
             return
         if action == "cancel":
             await self.app_server.send_error_response(pending["request_id"], "User input cancelled.")
+            self._mark_pending_record_answered(pending)
             pending_all.pop(token, None)
             self.store.save_pending_user_inputs(pending_all)
             await self._edit_callback_message(callback, "User input cancelled.")
@@ -652,6 +670,7 @@ class TelegramBridgeRequestMixin:
             expires_at = _parse_iso(str(pending.get("expires_at") or ""))
             if expires_at <= self.access.now_fn():
                 await self.app_server.send_error_response(pending["request_id"], "User input expired.")
+                self._mark_pending_record_answered(pending)
                 pending_all.pop(token, None)
                 self.store.save_pending_user_inputs(pending_all)
                 await self._send(chat_id, "User input expired.")
